@@ -64,6 +64,13 @@ protected:
 };
 
 class byte_ring {
+    // Separate the two hot counters without requiring over-aligned C++14 heap storage.
+    struct cursor {
+        std::atomic<std::size_t> position{0};
+        unsigned char padding[64 - sizeof(std::atomic<std::size_t>)];
+    };
+    static_assert(sizeof(cursor) == 64, "ring cursors must be a cache line apart");
+    cursor head_, tail_;
     bytes storage_;
     const std::size_t high_water_;
     // One producer can wait at a time. While it sleeps, tail stays fixed.
@@ -88,17 +95,15 @@ class byte_ring {
         return std::exchange(pending_, nullptr);
     }
 
-    alignas(64) std::atomic<std::size_t> head_{0};
-    alignas(64) std::atomic<std::size_t> tail_{0};
     template<class Fill>
     write_status try_fill(std::size_t size, Fill fill) {
         const auto capacity = storage_.size();
         if (size > capacity) return write_status::oversized;
-        const auto tail = tail_.load(std::memory_order_relaxed);
-        const auto used = tail - head_.load(std::memory_order_acquire);
+        const auto tail = tail_.position.load(std::memory_order_relaxed);
+        const auto used = tail - head_.position.load(std::memory_order_acquire);
         if (used > max_queued_before(size)) return write_status::full;
         if (!fill(tail & (capacity - 1))) return write_status::invalid;
-        tail_.store(tail + size, std::memory_order_release);
+        tail_.position.store(tail + size, std::memory_order_release);
         return write_status::published;
     }
 
@@ -146,7 +151,7 @@ public:
             else {
                 const auto limit = resume_limit(size);
                 resume_at_.store(limit);
-                if (tail_.load(std::memory_order_relaxed) - head_.load() > limit) {
+                if (tail_.position.load(std::memory_order_relaxed) - head_.position.load() > limit) {
                     pending_ = &waiter;
                     return;
                 }
@@ -171,14 +176,14 @@ public:
         const auto status = try_write(size, fill);
         if (status != write_status::full) return status;
 
-        const auto tail = tail_.load(std::memory_order_relaxed);
+        const auto tail = tail_.position.load(std::memory_order_relaxed);
         const auto limit = resume_limit(size);
         {
             std::unique_lock<std::mutex> lock(wait_mutex_);
             // Pair the SC store/load here with the consumer's head/store and
             // resume_at/load: either we see its progress or it sees our wait.
             resume_at_.store(limit);
-            space_.wait(lock, [&] { return tail - head_.load() <= limit; });
+            space_.wait(lock, [&] { return tail - head_.position.load() <= limit; });
             resume_at_.store(inactive);
         }
         // Only this producer can increase occupancy.
@@ -191,8 +196,8 @@ public:
         portal::wire::view first, second;
     };
     readable_spans peek(std::size_t skip, std::size_t maximum) const {
-        const auto head = head_.load(std::memory_order_relaxed);
-        const auto available = tail_.load(std::memory_order_acquire) - head;
+        const auto head = head_.position.load(std::memory_order_relaxed);
+        const auto available = tail_.position.load(std::memory_order_acquire) - head;
         check(skip <= available);
         const auto size = std::min(maximum, available - skip);
         const auto offset = (head + skip) & (storage_.size() - 1);
@@ -201,8 +206,8 @@ public:
     }
 
     void release(std::size_t used) {
-        const auto head = head_.load(std::memory_order_relaxed);
-        const auto available = tail_.load(std::memory_order_acquire) - head;
+        const auto head = head_.position.load(std::memory_order_relaxed);
+        const auto available = tail_.position.load(std::memory_order_acquire) - head;
         check(used <= available);
         reclaim(head, available, used);
     }
@@ -211,8 +216,8 @@ public:
     // reading the accepted bytes before it returns their count.
     template<class Consume>
     std::size_t read(Consume consume) {
-        const auto head = head_.load(std::memory_order_relaxed);
-        const auto available = tail_.load(std::memory_order_acquire) - head;
+        const auto head = head_.position.load(std::memory_order_relaxed);
+        const auto available = tail_.position.load(std::memory_order_acquire) - head;
         if (!available) return 0;
         const auto offset = head & (storage_.size() - 1);
         const auto span = std::min(available, storage_.size() - offset);
@@ -224,7 +229,7 @@ public:
 private:
     void reclaim(std::size_t head, std::size_t available, std::size_t used) {
         if (used) {
-            head_.store(head + used);
+            head_.position.store(head + used);
             const auto limit = resume_at_.load();
             if (limit != inactive && available - used <= limit) {
                 // Synchronize with the predicate-to-sleep transition. A stale
@@ -233,7 +238,7 @@ private:
                 {
                     std::lock_guard<std::mutex> lock(wait_mutex_);
                     if (pending_) {
-                        const auto queued = tail_.load(std::memory_order_relaxed) - (head + used);
+                        const auto queued = tail_.position.load(std::memory_order_relaxed) - (head + used);
                         if (queued <= resume_at_.load()) waiter = take_pending();
                     } else {
                         space_.notify_one();

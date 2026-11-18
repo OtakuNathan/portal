@@ -1,3 +1,4 @@
+#include <cstddef>
 #include "fixture.h"
 #include "portal/rpc/typed_import.h"
 #define PORTAL_IMPORT_DEF "tests/typed_rpc/import.def"
@@ -7,6 +8,9 @@
 
 namespace rb = rpc_ring_bench;
 namespace ff = flux_foundry;
+
+static_assert(alignof(rb::byte_ring) <= alignof(std::max_align_t),
+              "the send ring must support ordinary C++14 heap allocation");
 
 static void pad(rb::byte_ring& ring, std::size_t size) {
     w::bytes filler(size, 0xaa);
