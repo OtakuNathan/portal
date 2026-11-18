@@ -30,14 +30,14 @@ template<class C> struct cpp_return { using type = typename C::value_type; };
 template<> struct cpp_return<wire::none> { using type = void; };
 template<class R, class... A> struct signature { using type = R(A...); };
 template<class C> struct invoke_result {
-    template<class F, class... A> static typename C::value_type call(F& f, A&&... a) {
+    template<class F, class... A> static typename C::value_type call(const F& f, A&&... a) {
         static_assert(std::is_same<decltype(f(std::forward<A>(a)...)), typename C::value_type>::value,
                       "typed RPC handler must return the declared type exactly");
         return f(std::forward<A>(a)...);
     }
 };
 template<> struct invoke_result<wire::none> {
-    template<class F, class... A> static wire::unit call(F& f, A&&... a) {
+    template<class F, class... A> static wire::unit call(const F& f, A&&... a) {
         static_assert(std::is_void<decltype(f(std::forward<A>(a)...))>::value,
                       "none codec requires a void-returning handler");
         f(std::forward<A>(a)...); return {};
@@ -124,23 +124,37 @@ inline errc error_reply(bytes& out, const envelope& e, errc status, limits l = {
     (void)write_header(w, response_magic, e.method_id, e.revision, e.fingerprint, 0, status);
     return status;
 }
+namespace detail {
 template<class Method, class... A>
-errc encode_request(bytes& out, limits l, const A&... a) {
+wire::measure measure_request(limits l, const A&... args) noexcept {
     static_assert(std::is_same<typename Method::arguments,
         std::tuple<typename std::decay<A>::type...>>::value,
         "typed RPC arguments must match the declared value types; make narrowing explicit");
-    const auto refs = std::tie(a...);
-    using indices = std::make_index_sequence<Method::arity>;
     wire::measure s((std::min)(l.max_frame_bytes,
         static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)())));
-    if (!s.add(header_size) || !Method::size_args(s, refs, indices{})) return s.error();
-    out.resize(s.size()); wire::writer w(out.data(), out.size());
-    const auto payload = static_cast<std::uint32_t>(s.size() - header_size);
+    if (s.add(header_size) && !Method::size_args(s, std::tie(args...),
+            std::make_index_sequence<Method::arity>{}) && s.error() == errc::ok)
+        s.fail(errc::invalid_value);
+    return s;
+}
+
+template<class Method, class Tuple>
+errc write_request(wire::writer& w, std::size_t size, const Tuple& args) noexcept {
+    const auto payload = static_cast<std::uint32_t>(size - header_size);
     if (!write_header(w, request_magic, Method::id, Method::revision, Method::fingerprint(), payload, errc::ok)
-        || !Method::write_args(w, refs, indices{}) || !w.empty()) {
-        out.clear(); return errc::invalid_value;
-    }
+        || !Method::write_args(w, args, std::make_index_sequence<Method::arity>{}) || !w.empty())
+        return errc::invalid_value;
     return errc::ok;
+}
+}
+template<class Method, class... A>
+errc encode_request(bytes& out, limits l, const A&... a) {
+    const auto s = detail::measure_request<Method>(l, a...);
+    if (s.error() != errc::ok) return s.error();
+    out.resize(s.size()); wire::writer w(out.data(), out.size());
+    const auto status = detail::write_request<Method>(w, s.size(), std::tie(a...));
+    if (status != errc::ok) out.clear();
+    return status;
 }
 template<class Method>
 errc encode_response(bytes& out, const typename Method::result_type& result, limits l = {}) {
@@ -166,21 +180,22 @@ wire::result<typename Method::result_type> decode_response(view frame, limits l 
     return wire::decode<typename Method::return_codec>(e.payload, l);
 }
 
-// Immutable routing metadata after registration. User handlers must be safe for
-// the chosen concurrency. No per-request std::function/vector<value> is built.
+// Immutable routing metadata after registration. Registered handlers must be
+// const-invocable and safe for the chosen concurrency. No per-request
+// std::function/vector<value> is built.
 class router {
     struct entry_base {
         virtual ~entry_base() = default;
-        virtual errc invoke(view, bytes&, limits) = 0;
+        virtual errc invoke(view, bytes&, limits) const = 0;
     };
     template<class Method, class F> struct entry final : entry_base {
         F function;
         explicit entry(F f) : function(std::move(f)) {}
         template<std::size_t... I>
-        typename Method::result_type execute(typename Method::arguments& args, std::index_sequence<I...>) {
+        typename Method::result_type execute(typename Method::arguments& args, std::index_sequence<I...>) const {
             return detail::invoke_result<typename Method::return_codec>::call(function, std::move(std::get<I>(args))...);
         }
-        errc invoke(view body, bytes& out, limits l) override {
+        errc invoke(view body, bytes& out, limits l) const override {
             typename Method::arguments args{}; wire::reader r(body, l);
             using indices = std::make_index_sequence<Method::arity>;
             // Decode owns its payloads. Full consumption is checked before any
@@ -197,13 +212,98 @@ class router {
         std::unique_ptr<entry_base> implementation;
     };
     std::vector<route> routes_;
-    static bool before(const route& r, std::pair<std::uint64_t, std::uint32_t> key) noexcept {
-        return r.id < key.first || (r.id == key.first && r.revision < key.second);
+    using key_type = std::pair<std::uint64_t, std::uint32_t>;
+    template<class Row> static key_type key(const Row& row) noexcept {
+        return {row.id, row.revision};
+    }
+    template<class Row> static bool before(const Row& row, key_type wanted) noexcept {
+        return key(row) < wanted;
     }
 public:
+    // Borrows the request bytes and the separately owned handler. No index row escapes lookup.
+    class resolved_request {
+        friend class router;
+        envelope header_;
+        limits limits_;
+        const entry_base* handler_ = nullptr;
+        errc status_ = errc::ok;
+    public:
+        errc dispatch_into(bytes& reply) const {
+            auto error = status_;
+            if (handler_) {
+#if defined(__cpp_exceptions) || defined(__EXCEPTIONS) || defined(_CPPUNWIND)
+                try {
+#endif
+                    error = handler_->invoke(header_.payload, reply, limits_);
+#if defined(__cpp_exceptions) || defined(__EXCEPTIONS) || defined(_CPPUNWIND)
+                } catch (const std::bad_alloc&) { throw; }
+                  catch (...) { error = errc::handler_failed; }
+#endif
+            }
+            return error == errc::ok ? error : error_reply(reply, header_, error, limits_);
+        }
+    private:
+        resolved_request() = default;
+    };
+private:
+    static const entry_base* pointer(const std::unique_ptr<entry_base>& p) noexcept { return p.get(); }
+    static const entry_base* pointer(const entry_base* p) noexcept { return p; }
+    template<class Row>
+    static resolved_request lookup(const std::vector<Row>& rows, view frame, limits l) noexcept {
+        resolved_request result;
+        result.limits_ = l;
+        auto& e = result.header_;
+        result.status_ = read_envelope(frame, request_magic, e, l);
+        if (result.status_ != errc::ok) return result;
+        const auto wanted = std::make_pair(e.method_id, e.revision);
+        auto pos = std::lower_bound(rows.begin(), rows.end(), wanted, before<Row>);
+        if (pos == rows.end() || key(*pos) != wanted) result.status_ = errc::unknown_method;
+        else if (pos->hash != e.fingerprint) result.status_ = errc::incompatible_schema;
+        else result.handler_ = pointer(pos->implementation);
+        return result;
+    }
+public:
+    class handler_storage {
+        friend class router;
+        std::vector<std::unique_ptr<entry_base>> entries_;
+    };
+    // Transfer ownership of the stable handler objects out of a temporary registration table.
+    handler_storage take_handlers() && {
+        handler_storage storage;
+        storage.entries_.reserve(routes_.size());
+        for (auto& row : routes_) storage.entries_.push_back(std::move(row.implementation));
+        routes_.clear();
+        return storage;
+    }
+    // Borrowed index. Keep each contributing router or its transferred handler storage alive.
+    class index {
+        struct binding {
+            std::uint64_t id, hash;
+            std::uint32_t revision;
+            const entry_base* implementation;
+        };
+        std::vector<binding> rows_;
+    public:
+        resolved_request resolve(view frame, limits l = {}) const noexcept { return lookup(rows_, frame, l); }
+        // Merge two sorted tables into a fresh index. A duplicate rejects the whole batch.
+        errc extend(const router& added, index& output) const {
+            index next;
+            if (added.size() > next.rows_.max_size() - rows_.size()) return errc::limit_exceeded;
+            next.rows_.reserve(rows_.size() + added.size());
+            auto old = rows_.begin();
+            for (const auto& r : added.routes_) {
+                while (old != rows_.end() && key(*old) < key(r)) next.rows_.push_back(*old++);
+                if (old != rows_.end() && key(*old) == key(r)) return errc::invalid_value;
+                next.rows_.push_back({r.id, r.hash, r.revision, r.implementation.get()});
+            }
+            next.rows_.insert(next.rows_.end(), old, rows_.end());
+            output = std::move(next);
+            return errc::ok;
+        }
+    };
     template<class Method, class F> errc define(F&& fn) {
         const auto key = std::make_pair(static_cast<std::uint64_t>(Method::id), static_cast<std::uint32_t>(Method::revision));
-        const auto pos = std::lower_bound(routes_.begin(), routes_.end(), key, before);
+        const auto pos = std::lower_bound(routes_.begin(), routes_.end(), key, before<route>);
         if (pos != routes_.end() && pos->id == key.first && pos->revision == key.second)
             return errc::invalid_value; // explicit duplicate rejection; no dangling cached route
         using E = entry<Method, typename std::decay<F>::type>;
@@ -211,22 +311,8 @@ public:
         route r{Method::id, Method::fingerprint(), Method::revision, std::move(impl)};
         routes_.insert(pos, std::move(r)); return errc::ok;
     }
-    errc dispatch_into(const bytes& frame, bytes& reply, limits l = {}) {
-        envelope e; errc error = read_envelope(view(frame), request_magic, e, l);
-        if (error != errc::ok) return error_reply(reply, e, error, l);
-        const auto pos = std::lower_bound(routes_.begin(), routes_.end(), std::make_pair(e.method_id, e.revision), before);
-        if (pos == routes_.end() || pos->id != e.method_id || pos->revision != e.revision)
-            return error_reply(reply, e, errc::unknown_method, l);
-        if (pos->hash != e.fingerprint) return error_reply(reply, e, errc::incompatible_schema, l);
-#if defined(__cpp_exceptions) || defined(__EXCEPTIONS) || defined(_CPPUNWIND)
-        try {
-#endif
-            error = pos->implementation->invoke(e.payload, reply, l);
-#if defined(__cpp_exceptions) || defined(__EXCEPTIONS) || defined(_CPPUNWIND)
-        } catch (const std::bad_alloc&) { throw; }
-          catch (...) { error = errc::handler_failed; }
-#endif
-        return error == errc::ok ? error : error_reply(reply, e, error, l);
+    errc dispatch_into(const bytes& frame, bytes& reply, limits l = {}) const {
+        return lookup(routes_, view(frame), l).dispatch_into(reply);
     }
     std::size_t size() const noexcept { return routes_.size(); }
 };
@@ -262,10 +348,10 @@ public:
     };
 };
 class loopback_transport {
-    router* router_; limits limits_;
+    const router* router_; limits limits_;
 public:
-    explicit loopback_transport(router& r, limits l = {}) noexcept : router_(&r), limits_(l) {}
-    void round_trip_into(const bytes& request, bytes& response) { (void)router_->dispatch_into(request, response, limits_); }
+    explicit loopback_transport(const router& r, limits l = {}) noexcept : router_(&r), limits_(l) {}
+    void round_trip_into(const bytes& request, bytes& response) const { (void)router_->dispatch_into(request, response, limits_); }
 };
 template<class Method, class Transport, class... A>
 wire::result<typename Method::result_type> call(Transport& transport, workspace& storage,

@@ -1096,6 +1096,10 @@ every coroutine.
 
 ### RPC
 
+For dynamic tagged frames, concrete and type-erased typed invocations, and Linux
+and macOS TCP send costs, see the [send-ring benchmarks](../benchmarks/typed_rpc/README.md#send-ring-benchmarks).
+The round-trip benchmarks below exercise the dynamic backend and its transports.
+
 On Linux, installing the `gio-2.0` development package (for example,
 `libglib2.0-dev` on Debian) enables the nonblocking GLib transport.
 

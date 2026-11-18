@@ -73,13 +73,17 @@ static void protocol(){
  const auto golden=req;
  CHECK(server.dispatch_into(req,reply)==w::errc::ok);CHECK(calls==1);
  auto result=tr::decode_response<Add>(w::view(reply));CHECK(result&&result.value==42);
- for(std::size_t n=0;n<golden.size();++n){req.assign(golden.begin(),golden.begin()+n);CHECK(server.dispatch_into(req,reply)!=w::errc::ok);CHECK(calls==1);}
- for(auto off:{0u,4u,6u,8u,16u,20u,24u}){req=golden;req[off]^=0x80;CHECK(server.dispatch_into(req,reply)!=w::errc::ok);CHECK(calls==1);}
- req=golden;req.push_back(0);CHECK(server.dispatch_into(req,reply)==w::errc::malformed);CHECK(calls==1);
- req=golden;CHECK(server.dispatch_into(req,req)==w::errc::ok);CHECK(calls==2);CHECK(tr::decode_response<Add>(w::view(req)).value==42);
+ const tr::router& const_server=server;
+ CHECK(const_server.dispatch_into(req,reply)==w::errc::ok);CHECK(calls==2);
+ const tr::loopback_transport const_transport(const_server);
+ {tr::workspace w;auto c=tr::call<Add>(const_transport,w,{},std::int32_t(19),std::int32_t(23));CHECK(c&&c.value==42);CHECK(calls==3);}
+ for(std::size_t n=0;n<golden.size();++n){req.assign(golden.begin(),golden.begin()+n);CHECK(server.dispatch_into(req,reply)!=w::errc::ok);CHECK(calls==3);}
+ for(auto off:{0u,4u,6u,8u,16u,20u,24u}){req=golden;req[off]^=0x80;CHECK(server.dispatch_into(req,reply)!=w::errc::ok);CHECK(calls==3);}
+ req=golden;req.push_back(0);CHECK(server.dispatch_into(req,reply)==w::errc::malformed);CHECK(calls==3);
+ req=golden;CHECK(server.dispatch_into(req,req)==w::errc::ok);CHECK(calls==4);CHECK(tr::decode_response<Add>(w::view(req)).value==42);
  using other=tr::method<Add::id,Add::revision,w::u32,w::u32,w::u32>;
  CHECK(tr::encode_request<other>(req,{},std::uint32_t(1),std::uint32_t(2))==w::errc::ok);
- CHECK(server.dispatch_into(req,reply)==w::errc::incompatible_schema);CHECK(calls==2);
+ CHECK(server.dispatch_into(req,reply)==w::errc::incompatible_schema);CHECK(calls==4);
  auto mismatch=tr::decode_response<other>(w::view(reply));CHECK(!mismatch&&mismatch.error==w::errc::incompatible_schema);
  tr::router all;bind(all);tr::loopback_transport t(all);tr::workspace storage;
  auto ping=tr::call<Ping>(t,storage,{});CHECK(ping);
@@ -103,9 +107,10 @@ static void reentrancy_and_threads(){
  CHECK(shared_worker.retained_capacity()<=2*65536);
  tr::workspace no_cache(0);CHECK(tr::call<Add>(transport,no_cache,{},std::int32_t(2),std::int32_t(3)));CHECK(no_cache.retained_capacity()==0);
  tr::workspace small(64);CHECK(tr::call<Echo>(transport,small,{},std::string(1000,'z')));CHECK(small.retained_capacity()<=128);
+ const tr::router& const_server=server;
  std::atomic<int> count{0};std::vector<std::thread> workers;
  for(int j=0;j<4;++j)workers.emplace_back([&,j]{
-  tr::workspace w;tr::loopback_transport t(server);
+  tr::workspace w;const tr::loopback_transport t(const_server);
   for(int i=0;i<5000;++i){auto r=tr::call<Add>(t,w,{},std::int32_t(i),std::int32_t(j));CHECK(r&&r.value==i+j);++count;}
  });
  for(auto& t:workers) { t.join(); }

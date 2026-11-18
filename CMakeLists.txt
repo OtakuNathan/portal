@@ -24,6 +24,9 @@ endif()
 option(PORTAL_BUILD_TESTS "Build portal tests" ${PORTAL_IS_TOP_LEVEL})
 option(PORTAL_BUILD_EXAMPLES "Build portal runtime examples" OFF)
 option(PORTAL_BUILD_BENCHMARKS "Build portal benchmark executables" OFF)
+set(PORTAL_BUILD_RUNTIME_REGISTRATION AUTO CACHE STRING
+    "Build FF runtime registration when available (AUTO), require it (ON), or disable it (OFF)")
+set_property(CACHE PORTAL_BUILD_RUNTIME_REGISTRATION PROPERTY STRINGS AUTO ON OFF)
 
 if(PORTAL_BUILD_TESTS OR PORTAL_BUILD_EXAMPLES OR PORTAL_BUILD_BENCHMARKS)
     find_package(Python3 COMPONENTS Interpreter Development)
@@ -448,18 +451,38 @@ endif()
 
 if(PORTAL_BUILD_BENCHMARKS)
     find_package(Threads REQUIRED)
+    add_executable(rpc_ring_benchmark benchmarks/rpc_ring_benchmark.cpp)
+    target_link_libraries(rpc_ring_benchmark PRIVATE portal::portal Threads::Threads)
+    if(CMAKE_SYSTEM_NAME MATCHES "^(Linux|Darwin)$")
+        add_executable(rpc_ring_tcp_benchmark benchmarks/rpc_ring_tcp_benchmark.cpp)
+        target_link_libraries(rpc_ring_tcp_benchmark PRIVATE portal::portal Threads::Threads)
+        if(PORTAL_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            add_test(NAME rpc_ring_tcp_reclaim COMMAND rpc_ring_tcp_benchmark --check)
+        endif()
+    endif()
     add_executable(rpc_call_benchmark benchmarks/rpc_call_benchmark.cpp)
     target_link_libraries(rpc_call_benchmark PRIVATE
         portal::portal
         Threads::Threads
     )
     if(PORTAL_BUILD_TESTS)
+        add_test(NAME rpc_ring_contract COMMAND rpc_ring_benchmark --check)
+        set_tests_properties(rpc_ring_contract PROPERTIES TIMEOUT 30)
         # Multiple calls must complete after each FF asynchronous handoff.
         add_test(NAME rpc_benchmark_smoke COMMAND rpc_call_benchmark 100)
         set_tests_properties(rpc_benchmark_smoke PROPERTIES TIMEOUT 30)
     endif()
 
     if(FLUX_FOUNDRY_INCLUDE_DIR)
+        add_executable(rpc_ring_multiflow_benchmark benchmarks/rpc_ring_multiflow_benchmark.cpp)
+        target_link_libraries(rpc_ring_multiflow_benchmark PRIVATE portal::portal Threads::Threads)
+        target_include_directories(rpc_ring_multiflow_benchmark SYSTEM PRIVATE "${FLUX_FOUNDRY_INCLUDE_DIR}")
+        if(PORTAL_BUILD_TESTS)
+            add_test(NAME rpc_ring_multiflow_progress COMMAND rpc_ring_multiflow_benchmark --check)
+            set_tests_properties(rpc_ring_multiflow_progress PROPERTIES TIMEOUT 30)
+        endif()
+        target_compile_definitions(rpc_ring_benchmark PRIVATE PORTAL_HAS_FLUX_FOUNDRY=1)
+        target_include_directories(rpc_ring_benchmark SYSTEM PRIVATE "${FLUX_FOUNDRY_INCLUDE_DIR}")
         target_compile_definitions(rpc_call_benchmark PRIVATE
             PORTAL_HAS_FLUX_FOUNDRY=1
         )
@@ -491,6 +514,20 @@ if(PORTAL_BUILD_BENCHMARKS)
         target_compile_definitions(rpc_call_benchmark PRIVATE PORTAL_HAS_RPCLIB=1)
         target_include_directories(rpc_call_benchmark SYSTEM PRIVATE "${RPCLIB_INCLUDE_DIR}")
         target_link_libraries(rpc_call_benchmark PRIVATE "${RPCLIB_LIBRARY}")
+        if(CMAKE_SYSTEM_NAME MATCHES "^(Linux|Darwin)$")
+            add_executable(typed_rpc_rpclib_comparison benchmarks/typed_rpc/rpclib_comparison.cpp)
+            target_compile_features(typed_rpc_rpclib_comparison PRIVATE cxx_std_17)
+            if(FLUX_FOUNDRY_INCLUDE_DIR)
+                target_compile_definitions(typed_rpc_rpclib_comparison PRIVATE PORTAL_HAS_FLUX_FOUNDRY=1)
+                target_include_directories(typed_rpc_rpclib_comparison SYSTEM PRIVATE "${FLUX_FOUNDRY_INCLUDE_DIR}")
+                if(PORTAL_BUILD_TESTS)
+                    add_test(NAME rpclib_ff_interop COMMAND typed_rpc_rpclib_comparison --check-rpclib-ff)
+                    set_tests_properties(rpclib_ff_interop PROPERTIES TIMEOUT 30)
+                endif()
+            endif()
+            target_include_directories(typed_rpc_rpclib_comparison SYSTEM PRIVATE "${RPCLIB_INCLUDE_DIR}")
+            target_link_libraries(typed_rpc_rpclib_comparison PRIVATE portal::portal Threads::Threads "${RPCLIB_LIBRARY}")
+        endif()
     endif()
 
     if(Python3_Development_FOUND)
@@ -545,6 +582,33 @@ if(PORTAL_BUILD_BENCHMARKS)
     endif()
 endif()
 
+if(PORTAL_BUILD_RUNTIME_REGISTRATION)
+    include(cmake/portalRuntimeRegistration.cmake)
+    if(NOT portal_runtime_registration_FOUND)
+        if(PORTAL_BUILD_RUNTIME_REGISTRATION STREQUAL "AUTO")
+            message(STATUS "Skipping FF runtime registration: ${portal_NOT_FOUND_MESSAGE}")
+        else()
+            message(FATAL_ERROR "${portal_NOT_FOUND_MESSAGE}")
+        endif()
+    endif()
+endif()
+if(PORTAL_BUILD_RUNTIME_REGISTRATION AND portal_runtime_registration_FOUND)
+    # Expose the build-tree target to callers of add_subdirectory(portal).
+    set_property(TARGET portal::runtime_registration PROPERTY IMPORTED_GLOBAL TRUE)
+    if(PORTAL_BUILD_TESTS)
+        add_executable(runtime_registration_test tests/runtime_registration/registration_test.cpp)
+        target_link_libraries(runtime_registration_test PRIVATE portal::runtime_registration)
+        add_test(NAME runtime_registration COMMAND runtime_registration_test
+            "${CMAKE_CXX_COMPILER}" "${CMAKE_CURRENT_SOURCE_DIR}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_registration/module.cpp")
+        set_tests_properties(runtime_registration PROPERTIES TIMEOUT 90)
+    endif()
+    if(PORTAL_BUILD_BENCHMARKS)
+        add_executable(runtime_registration_benchmark benchmarks/runtime_registration.cpp)
+        target_link_libraries(runtime_registration_benchmark PRIVATE portal::runtime_registration)
+    endif()
+endif()
+
 install(TARGETS portal EXPORT portalTargets)
 install(DIRECTORY portal DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 install(EXPORT portalTargets
@@ -564,6 +628,7 @@ write_basic_package_version_file(
     COMPATIBILITY SameMajorVersion
 )
 install(FILES
+    cmake/portalRuntimeRegistration.cmake
     "${CMAKE_CURRENT_BINARY_DIR}/portalConfig.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/portalConfigVersion.cmake"
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/portal"

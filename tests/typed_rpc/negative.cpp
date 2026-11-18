@@ -2,7 +2,13 @@
 namespace w=portal::wire;
 namespace tr=portal::typed_rpc;
 struct Bad{std::uint32_t a=0,b=0;};
-#if NEGATIVE_CASE == 0
+#if NEGATIVE_CASE == 7
+#include "portal/rpc/typed_import.h"
+#define PORTAL_IMPORT_DEF "tests/typed_rpc/import.def"
+#include "portal/import.h"
+#undef PORTAL_IMPORT_DEF
+template<class, class> struct wrong_route { using type = tr::method<1, 1, w::i32>; };
+#elif NEGATIVE_CASE == 0
 #define F(X,T) X(T,1,a,w::u32) X(T,2,b,w::u32)
 PORTAL_WIRE_RECORD(Bad,1,1,F);
 #elif NEGATIVE_CASE == 1
@@ -32,5 +38,10 @@ int main(){
 #elif NEGATIVE_CASE == 6
  w::sequence<w::boolean,4>::value_type x;
  (void)x;
+#elif NEGATIVE_CASE == 7
+ using context = tr::direct_import_backend<int, wrong_route>::context;
+ auto endpoint = std::make_shared<context>(std::make_shared<int>());
+ auto invalid = portal::async_functions::typed_ping<false>(endpoint);
+ (void)invalid;
 #endif
 }

@@ -25,14 +25,36 @@ inline std::error_code make_error_code(errc e) noexcept {
     static error_category category;
     return std::error_code(static_cast<int>(e), category);
 }
+// A transport may retain the argument snapshot while its output queue is full.
+// Only call write() with a reservation of exactly size() bytes.
+template<class Method> class prepared_request {
+    wire::measure measured_;
+    optional<typename Method::arguments> arguments_;
+public:
+    template<class... A> explicit prepared_request(limits budget, A&&... args)
+        : measured_(detail::measure_request<Method>(budget, args...)) {
+        if (error() == errc::ok) arguments_.emplace(std::forward<A>(args)...);
+    }
+    std::size_t size() const noexcept { return measured_.size(); }
+    errc error() const noexcept { return measured_.error(); }
+    errc write(wire::writer& w) const noexcept {
+        if (error() != errc::ok) return error();
+        return detail::write_request<Method>(w, size(), *arguments_);
+    }
+};
 namespace detail {
-template<class Method, class Token> struct response_completion {
+template<class R> struct response_value {
+    static async_result<R> take(R&& value) noexcept { return async_result<R>(std::move(value)); }
+};
+template<> struct response_value<void> {
+    static async_result<void> take(wire::unit) noexcept { return {}; }
+};
+template<class Method, class Token, class R = typename Method::result_type> struct response_completion {
     Token token;
     limits budget;
     // Transport moves the final response here. Decoding finishes before the
     // frame is destroyed; no view escapes into an FF continuation.
     void operator()(bytes response, async_error error = {}) const noexcept {
-        using R = typename Method::result_type;
         if (error.code || error.exception) {
             token.finish(async_result<R>(async_error_tag, std::move(error))); return;
         }
@@ -40,7 +62,7 @@ template<class Method, class Token> struct response_completion {
         try {
 #endif
             auto decoded = decode_response<Method>(view(response), budget);
-            if (decoded) token.finish(async_result<R>(std::move(decoded.value)));
+            if (decoded) token.finish(response_value<R>::take(std::move(decoded.value)));
             else token.finish(async_result<R>(async_error_tag, make_error_code(decoded.error)));
 #if PORTAL_HAS_EXCEPTIONS
         } catch (...) {
@@ -65,6 +87,26 @@ template<class Method> struct request_operation {
             response_completion<Method, Token>{std::move(token), budget});
     }
 };
+template<class Method, class R = typename Method::result_type> struct direct_request_operation {
+    prepared_request<Method> request;
+    limits budget;
+    template<class Transport, class Token>
+    async_submission operator()(Transport& transport, Token token)
+        noexcept(noexcept(transport.async_round_trip_into(
+            std::move(request), std::declval<response_completion<Method, Token, R>>()))) {
+        if (request.error() != errc::ok)
+            return async_submission::reject(make_error_code(request.error()));
+        return transport.async_round_trip_into(std::move(request),
+            response_completion<Method, Token, R>{std::move(token), budget});
+    }
+};
+
+template<class Method, class R, class Transport, class... A>
+auto make_direct_call(std::shared_ptr<Transport> transport, limits budget, A&&... args) {
+    return portal::make_invocation<R>(std::move(transport), direct_request_operation<Method, R>{
+        prepared_request<Method>(budget, std::forward<A>(args)...), budget});
+}
+
 }
 // The existing static_invocation is the one owner of delivery/retirement state.
 // No additional std::function/shared_ptr state is introduced by this adapter.
@@ -78,5 +120,11 @@ auto make_rpc_invocation(std::shared_ptr<Transport> transport, limits budget, co
     return portal::make_invocation<typename Method::result_type>(std::move(transport),
         detail::request_operation<Method>{std::move(request), budget, status});
 }
+template<class Method, class Transport, class... A>
+auto make_direct_rpc_invocation(std::shared_ptr<Transport> transport, limits budget, A&&... args) {
+    return detail::make_direct_call<Method, typename Method::result_type>(
+        std::move(transport), budget, std::forward<A>(args)...);
+}
+
 }}
 #endif

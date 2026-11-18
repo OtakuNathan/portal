@@ -72,21 +72,39 @@ public:
 class writer {
     std::uint8_t* current_;
     std::size_t remaining_;
+    std::uint8_t* second_;
+    std::size_t second_size_;
 public:
-    writer(std::uint8_t* p, std::size_t n) noexcept : current_(p), remaining_(n) {}
+    writer(std::uint8_t* first, std::size_t n, std::uint8_t* second, std::size_t m) noexcept
+        : current_(first), remaining_(n), second_(second), second_size_(m) {}
+    writer(std::uint8_t* p, std::size_t n) noexcept : writer(p, n, nullptr, 0) {}
     template<class U> bool integer(U x) noexcept {
         static_assert(std::is_unsigned<U>::value, "unsigned wire bits required");
-        if (sizeof(U) > remaining_) return false;
+        if (sizeof(U) > remaining_) {
+            std::uint8_t field[sizeof(U)];
+            for (std::size_t i = 0; i != sizeof(U); ++i)
+                field[i] = static_cast<std::uint8_t>(x >> (i * 8));
+            return raw(field, sizeof(field));
+        }
         for (std::size_t i = 0; i != sizeof(U); ++i)
             current_[i] = static_cast<std::uint8_t>(x >> (i * 8));
         current_ += sizeof(U); remaining_ -= sizeof(U); return true;
     }
     bool raw(const void* p, std::size_t n) noexcept {
-        if (n > remaining_ || (n && !p)) return false;
-        if (n) { std::memcpy(current_, p, n); current_ += n; remaining_ -= n; }
+        if (!n) return true;
+        if (!p) return false;
+        const auto* data = static_cast<const std::uint8_t*>(p);
+        if (n > remaining_) {
+            if (n - remaining_ > second_size_) return false;
+            if (remaining_) std::memcpy(current_, data, remaining_);
+            data += remaining_; n -= remaining_;
+            current_ = second_; remaining_ = second_size_; second_size_ = 0;
+        }
+        std::memcpy(current_, data, n);
+        current_ += n; remaining_ -= n;
         return true;
     }
-    bool empty() const noexcept { return remaining_ == 0; }
+    bool empty() const noexcept { return remaining_ == 0 && second_size_ == 0; }
 };
 class reader {
     const std::uint8_t* current_;

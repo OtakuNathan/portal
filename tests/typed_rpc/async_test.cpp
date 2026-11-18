@@ -1,5 +1,8 @@
 #include "fixture.h"
-#include "portal/rpc/typed_async.h"
+#include "portal/rpc/typed_import.h"
+#define PORTAL_IMPORT_DEF "tests/typed_rpc/import.def"
+#include "portal/import.h"
+#undef PORTAL_IMPORT_DEF
 #include <functional>
 #include <thread>
 #include <mutex>
@@ -27,7 +30,50 @@ struct no_throw_transport {
         w::bytes response;server.dispatch_into(request,response);done(std::move(response),{});
         return portal::async_submission::accept();
     }
+    template<class Method, class H>
+    portal::async_submission async_round_trip_into(tr::prepared_request<Method> request, H done) noexcept {
+        w::bytes frame(request.size()), response;
+        w::writer writer(frame.data(), frame.size());
+        CHECK(request.write(writer) == w::errc::ok);
+        server.dispatch_into(frame, response);
+        done(std::move(response), {});
+        return portal::async_submission::accept();
+    }
 };
+template<class Symbol, class Signature> struct routes;
+using service_echo = portal::import_symbols::typed_service::echo;
+template<> struct routes<service_echo, std::string(const std::string&)> { using type = Echo; };
+template<> struct routes<service_echo, Add::signature_t> { using type = Add; };
+template<> struct routes<portal::import_symbols::typed_ping, void()> { using type = Ping; };
+
+static void check_generated_imports() {
+    using context = tr::direct_import_backend<no_throw_transport, routes>::context;
+    using service = portal::typed_service<context>;
+    auto endpoint = std::make_shared<context>(std::make_shared<no_throw_transport>());
+    auto client = portal::bind_static_async<portal::typed_service>(endpoint, service::object_t{});
+    auto erased = portal::bind_async<portal::typed_service>(endpoint, service::object_t{});
+    int finished = 0;
+    auto sum = client.echo(std::int32_t(19), std::int32_t(23));
+    std::move(sum).start([&](portal::async_result<std::int32_t> r) noexcept {
+        CHECK(r.has_value() && *r.value == 42); ++finished;
+    });
+    std::string text("owned");
+    auto echo = erased.echo(std::move(text));
+    static_assert(std::is_same<decltype(echo), portal::invocation<std::string>>::value, "erased view");
+    text.assign("changed");
+    std::move(echo).start([&](portal::async_result<std::string> r) noexcept {
+        CHECK(r.has_value() && *r.value == "owned"); ++finished;
+    });
+    auto ping = portal::async_functions::typed_ping<false>(endpoint);
+    std::move(ping).start([&](portal::async_result<void> r) noexcept { CHECK(r.has_value()); ++finished; });
+    endpoint->budget.max_frame_bytes = 1;
+    auto rejected = portal::async_functions::typed_ping(endpoint);
+    endpoint.reset();
+    std::move(rejected).start([&](portal::async_result<void> r) noexcept {
+        CHECK(!r.has_value() && r.error.code == tr::make_error_code(w::errc::limit_exceeded)); ++finished;
+    });
+    CHECK(finished == 4);
+}
 struct racing_transport {
     tr::router server;std::thread worker;
     racing_transport(){bind(server);}
@@ -47,10 +93,16 @@ struct throwing_transport {
 };
 #endif
 int main(){
+    check_generated_imports();
     auto safe=std::make_shared<no_throw_transport>();int simple=0;
     auto first=tr::make_rpc_invocation<Add>(safe,{},std::int32_t(20),std::int32_t(22));
     std::move(first).start([&](portal::async_result<std::int32_t> r) noexcept {CHECK(r.has_value());CHECK(*r.value==42);++simple;});
     CHECK(simple==1);
+    auto direct = tr::make_direct_rpc_invocation<Add>(safe, {}, std::int32_t(20), std::int32_t(22));
+    std::move(direct).start([&](portal::async_result<std::int32_t> r) noexcept {
+        CHECK(r.has_value() && *r.value == 42); ++simple;
+    });
+    CHECK(simple == 2);
     auto t=std::make_shared<transport>();int calls=0;
     auto call=tr::make_rpc_invocation<Echo>(t,{},std::string(1000,'a'));
     std::move(call).start([&](portal::async_result<std::string> r) noexcept {CHECK(r.has_value());CHECK(r.value->size()==1000);++calls;});

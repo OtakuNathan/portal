@@ -31,6 +31,14 @@ jobs:
           ref: 98d73c280667226f0fbb6f4408626ab875e2bd2a
           path: build-deps/flux_foundry
 
+      - name: Checkout lease for runtime registration
+        if: runner.os != 'Windows'
+        uses: actions/checkout@v4
+        with:
+          repository: OtakuNathan/lease
+          ref: ae70c326c767a299570a26b8e49def6907d7b3a2
+          path: build-deps/lease
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -54,6 +62,8 @@ jobs:
           -DCMAKE_CXX_STANDARD=14
           -DPORTAL_BUILD_BENCHMARKS=ON
           -DPORTAL_BUILD_EXAMPLES=ON
+          -DPORTAL_BUILD_RUNTIME_REGISTRATION=${{ runner.os != 'Windows' && 'ON' || 'OFF' }}
+          -DPORTAL_LEASE_INCLUDE_DIR="${{ github.workspace }}/build-deps/lease/lease"
           -DPORTAL_TYPED_RPC_REQUIRE_FF=ON
           -DFLUX_FOUNDRY_INCLUDE_DIR="${{ github.workspace }}/build-deps/flux_foundry"
           -DPython3_ROOT_DIR="${{ env.pythonLocation }}"
@@ -75,6 +85,9 @@ jobs:
           cmake -S tests/package_consumer -B consumer-build
           -DCMAKE_CXX_STANDARD=14
           -DCMAKE_PREFIX_PATH="${{ runner.temp }}/portal-install"
+          -DPORTAL_TEST_RUNTIME_REGISTRATION=${{ runner.os != 'Windows' && 'ON' || 'OFF' }}
+          -DFLUX_FOUNDRY_INCLUDE_DIR="${{ github.workspace }}/build-deps/flux_foundry"
+          -DPORTAL_LEASE_INCLUDE_DIR="${{ github.workspace }}/build-deps/lease/lease"
 
       - name: Build package consumer
         run: cmake --build consumer-build --config ${{ matrix.build-type }} --parallel 2

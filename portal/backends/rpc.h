@@ -136,31 +136,71 @@ namespace portal {
             constexpr std::uint32_t response_magic = 0x52505244u;
             constexpr std::uint8_t protocol_version = 1;
 
-            class writer {
+            class vector_sink {
+                bytes data_;
+
+            protected:
+                void put_byte(std::uint8_t byte) { data_.push_back(byte); }
+
+                template <typename Byte>
+                void append(const Byte* data, std::size_t size) {
+                    data_.insert(data_.end(), data, data + size);
+                }
+
             public:
-                explicit writer(std::size_t capacity = 0) {
+                explicit vector_sink(std::size_t capacity = 0) {
                     data_.reserve(capacity);
                 }
 
-                // An explicit reuse path. The original owning writer is unchanged.
-                writer(bytes&& storage, std::size_t capacity)
+                vector_sink(bytes&& storage, std::size_t capacity)
                     : data_(std::move(storage)) {
                     data_.clear();
                     data_.reserve(capacity);
                 }
 
+                bytes finish() { return std::move(data_); }
+            };
+
+            template <typename Sink>
+            class field_writer : public Sink {
+            public:
+                using Sink::Sink;
+
                 template <typename UInt>
                 void integer(UInt number) {
                     static_assert(std::is_unsigned<UInt>::value, "wire integers must be unsigned");
                     if (sizeof(UInt) == 1) {
-                        data_.push_back(static_cast<std::uint8_t>(number));
+                        this->put_byte(static_cast<std::uint8_t>(number));
                         return;
                     }
                     std::uint8_t encoded[sizeof(UInt)];
-                    for (std::size_t i = 0; i < sizeof(UInt); ++i) {
-                        encoded[i] = static_cast<std::uint8_t>(number >> (i * 8));
-                    }
-                    data_.insert(data_.end(), encoded, encoded + sizeof(UInt));
+                    store_integer(encoded, number);
+                    this->append(encoded, sizeof(UInt));
+                }
+
+                template <typename UInt>
+                void tagged_integer(value_kind kind, UInt number) {
+                    std::uint8_t encoded[1 + sizeof(UInt)];
+                    encoded[0] = static_cast<std::uint8_t>(kind);
+                    store_integer(encoded + 1, number);
+                    this->append(encoded, sizeof(encoded));
+                }
+
+                void request_header(std::uint64_t method, std::uint32_t argc) {
+                    std::uint8_t header[17];
+                    store_integer(header, request_magic);
+                    header[4] = protocol_version;
+                    store_integer(header + 5, method);
+                    store_integer(header + 13, argc);
+                    this->append(header, sizeof(header));
+                }
+
+                void response_header(std::uint8_t status) {
+                    std::uint8_t header[6];
+                    store_integer(header, response_magic);
+                    header[4] = protocol_version;
+                    header[5] = status;
+                    this->append(header, sizeof(header));
                 }
 
                 void raw(const char* data, std::size_t size) {
@@ -169,7 +209,7 @@ namespace portal {
                     }
                     integer<std::uint32_t>(static_cast<std::uint32_t>(size));
                     if (size != 0) {
-                        data_.insert(data_.end(), data, data + size);
+                        this->append(data, size);
                     }
                 }
 
@@ -177,11 +217,16 @@ namespace portal {
                     raw(text.data(), text.size());
                 }
 
-                bytes finish() { return std::move(data_); }
-
             private:
-                bytes data_;
+                template <typename UInt>
+                static void store_integer(std::uint8_t* dest, UInt number) noexcept {
+                    for (std::size_t i = 0; i < sizeof(UInt); ++i) {
+                        dest[i] = static_cast<std::uint8_t>(number >> (i * 8));
+                    }
+                }
             };
+
+            using writer = field_writer<vector_sink>;
 
             class reader {
             public:
@@ -229,32 +274,34 @@ namespace portal {
                 bool valid_ = true;
             };
 
-            inline void encode_value(writer& out, const value& input) {
-                out.integer<std::uint8_t>(static_cast<std::uint8_t>(input.kind()));
+            template <typename Writer>
+            void encode_value(Writer& out, const value& input) {
                 switch (input.kind()) {
                 case value_kind::undefined:
+                    out.integer(static_cast<std::uint8_t>(value_kind::undefined));
                     return;
                 case value_kind::signed_integer: {
                     std::uint64_t bits = 0;
                     const auto number = input.as_signed();
                     std::memcpy(&bits, &number, sizeof(bits));
-                    out.integer<std::uint64_t>(bits);
+                    out.tagged_integer(input.kind(), bits);
                     return;
                 }
                 case value_kind::unsigned_integer:
-                    out.integer<std::uint64_t>(input.as_unsigned());
+                    out.tagged_integer(input.kind(), input.as_unsigned());
                     return;
                 case value_kind::real: {
                     std::uint64_t bits = 0;
                     const auto number = input.as_real();
                     std::memcpy(&bits, &number, sizeof(bits));
-                    out.integer<std::uint64_t>(bits);
+                    out.tagged_integer(input.kind(), bits);
                     return;
                 }
                 case value_kind::boolean:
-                    out.integer<std::uint8_t>(input.as_boolean() ? 1u : 0u);
+                    out.tagged_integer(input.kind(), static_cast<std::uint8_t>(input.as_boolean()));
                     return;
                 case value_kind::string:
+                    out.integer(static_cast<std::uint8_t>(value_kind::string));
                     out.raw(input.string_data(), input.string_size());
                     return;
                 }
@@ -339,10 +386,7 @@ namespace portal {
                     frame_size = checked_add(frame_size, encoded_size(arg));
                 }
                 writer out(frame_size);
-                out.integer<std::uint32_t>(request_magic);
-                out.integer<std::uint8_t>(protocol_version);
-                out.integer<std::uint64_t>(method);
-                out.integer<std::uint32_t>(static_cast<std::uint32_t>(args.size()));
+                out.request_header(method, static_cast<std::uint32_t>(args.size()));
                 for (const auto& arg : args) {
                     encode_value(out, arg);
                 }
@@ -357,10 +401,7 @@ namespace portal {
                 using swallow = int[];
                 (void)swallow{0, (frame_size = checked_add(frame_size, encoded_size(args)), 0)...};
                 writer out(frame_size);
-                out.integer<std::uint32_t>(request_magic);
-                out.integer<std::uint8_t>(protocol_version);
-                out.integer<std::uint64_t>(method);
-                out.integer<std::uint32_t>(static_cast<std::uint32_t>(sizeof...(Values)));
+                out.request_header(method, static_cast<std::uint32_t>(sizeof...(Values)));
                 (void)swallow{0, (encode_value(out, args), 0)...};
                 return out.finish();
             }
@@ -377,10 +418,7 @@ namespace portal {
                 using swallow = int[];
                 (void)swallow{0, (frame_size = checked_add(frame_size, encoded_size(args)), 0)...};
                 writer out(std::move(output), frame_size);
-                out.integer<std::uint32_t>(request_magic);
-                out.integer<std::uint8_t>(protocol_version);
-                out.integer<std::uint64_t>(method);
-                out.integer<std::uint32_t>(static_cast<std::uint32_t>(sizeof...(Values)));
+                out.request_header(method, static_cast<std::uint32_t>(sizeof...(Values)));
                 (void)swallow{0, (encode_value(out, args), 0)...};
                 output = out.finish();
             }
@@ -388,9 +426,7 @@ namespace portal {
             inline void encode_response_into(bytes& output, const value& result) {
                 const auto size = checked_add(7, encoded_size(result));
                 writer out(std::move(output), size);
-                out.integer<std::uint32_t>(response_magic);
-                out.integer<std::uint8_t>(protocol_version);
-                out.integer<std::uint8_t>(0);
+                out.response_header(0);
                 encode_value(out, result);
                 output = out.finish();
             }
@@ -400,9 +436,7 @@ namespace portal {
                     PORTAL_RAISE(protocol_error("RPC error message is too large"));
                 const auto size = checked_add(10, message.size());
                 writer out(std::move(output), size);
-                out.integer<std::uint32_t>(response_magic);
-                out.integer<std::uint8_t>(protocol_version);
-                out.integer<std::uint8_t>(1);
+                out.response_header(1);
                 out.raw(message);
                 output = out.finish();
             }
@@ -455,9 +489,7 @@ namespace portal {
 
             inline bytes encode_response(const value& result) {
                 writer out(checked_add(7, encoded_size(result)));
-                out.integer<std::uint32_t>(response_magic);
-                out.integer<std::uint8_t>(protocol_version);
-                out.integer<std::uint8_t>(0);
+                out.response_header(0);
                 encode_value(out, result);
                 return out.finish();
             }
@@ -467,9 +499,7 @@ namespace portal {
                     PORTAL_RAISE(protocol_error("RPC error message is too large"));
                 }
                 writer out(checked_add(10, message.size()));
-                out.integer<std::uint32_t>(response_magic);
-                out.integer<std::uint8_t>(protocol_version);
-                out.integer<std::uint8_t>(1);
+                out.response_header(1);
                 out.raw(message);
                 return out.finish();
             }

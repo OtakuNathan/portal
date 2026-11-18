@@ -34,6 +34,9 @@ function(portal_typed_rpc_test name source)
 endfunction()
 portal_typed_rpc_test(typed_rpc_codec codec_test.cpp)
 portal_typed_rpc_test(typed_rpc_async async_test.cpp)
+if(CMAKE_SYSTEM_NAME MATCHES "^(Linux|Darwin)$")
+    portal_typed_rpc_test(tcp_sender tcp_sender_test.cpp)
+endif()
 portal_typed_rpc_test(typed_rpc_failures failure_test.cpp)
 portal_typed_rpc_test(typed_rpc_contract_valid negative.cpp)
 target_compile_definitions(typed_rpc_contract_valid_test PRIVATE NEGATIVE_CASE=0)
@@ -46,8 +49,9 @@ set(contract_diagnostics
     "wire record requires a PORTAL_WIRE_RECORD declaration"
     "typed RPC arguments must match the declared value types"
     "typed RPC handler must return the declared type exactly"
-    "vector<bool> is not a wire sequence")
-foreach(case RANGE 0 6)
+    "vector<bool> is not a wire sequence"
+    "typed RPC method must match the selected import signature")
+foreach(case RANGE 0 7)
     try_compile(contract_compiled
         "${CMAKE_CURRENT_BINARY_DIR}/compile_checks/${case}"
         "${CMAKE_CURRENT_SOURCE_DIR}/negative.cpp"
@@ -92,6 +96,8 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     endforeach()
 endif()
 if(EXISTS "${FLUX_FOUNDRY_INCLUDE_DIR}/flow/flow.h")
+    portal_typed_rpc_test(typed_rpc_ring ring_test.cpp)
+    target_include_directories(typed_rpc_ring_test SYSTEM PRIVATE "${FLUX_FOUNDRY_INCLUDE_DIR}")
     portal_typed_rpc_test(typed_rpc_ff ff_test.cpp)
     target_include_directories(typed_rpc_ff_test SYSTEM PRIVATE "${FLUX_FOUNDRY_INCLUDE_DIR}")
 elseif(PORTAL_TYPED_RPC_REQUIRE_FF)
@@ -100,6 +106,9 @@ else()
     message(STATUS "Skipping typed RPC FF integration: no FF checkout selected")
 endif()
 if(PORTAL_TYPED_RPC_BUILD_BENCHMARKS)
+    add_executable(typed_ring_probe "${PORTAL_ROOT}/benchmarks/typed_rpc/ring_probe.cpp")
+    target_include_directories(typed_ring_probe PRIVATE "${PORTAL_ROOT}")
+    target_link_libraries(typed_ring_probe PRIVATE Threads::Threads)
     if(PORTAL_TYPED_RPC_ISOLATED_LEGACY)
         if(NOT Python3_Interpreter_FOUND)
             message(FATAL_ERROR "Isolated legacy benchmark extraction requires Python")

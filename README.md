@@ -182,20 +182,89 @@ of their project with a newer standard.
 
 ## Choose an RPC style
 
-Both RPC styles are supported C++14 APIs through `portal::portal`:
+| Wire protocol | When to use it | Public API |
+| --- | --- | --- |
+| Dynamic RPC | Peers exchange tagged values. Generated `.def` calls use converters and select the first viable overload in declaration order. | `<portal/backends/rpc.h>`, with reusable buffers in `<portal/backends/rpc_reuse.h>` |
+| Typed RPC | Peers share a method ID, revision and value schema. The method codecs handle scalars, records and sequences directly. | `<portal/rpc/typed.h>` for synchronous calls and `<portal/rpc/typed_async.h>` for owned async calls |
 
-| Your protocol | Public entry point |
-| --- | --- |
-| Existing Portal declarations, converters, ordered overloads or tagged-wire peers | `<portal/backends/rpc.h>`, with optional storage reuse in `<portal/backends/rpc_reuse.h>` |
-| Shared value schemas and fixed method contracts with owning records/sequences | `<portal/rpc/typed.h>`, with owned async calls in `<portal/rpc/typed_async.h>` |
+Both peers must agree on the wire protocol. Both styles let the application supply
+the transport. [Dynamic RPC example](docs/reference.md#rpc-backend) ·
+[Typed RPC schema and synchronous example](docs/typed_rpc.md#synchronous-owning-calls)
 
-For new value-oriented protocols where both peers share the schema, start with
-typed RPC. The existing backend keeps its API and protocol. Each pair of peers
-must use the same protocol; the two wire formats are distinct. Both styles let
-the application supply its transport and explicitly reuse storage.
+### Concrete and type-erased async RPC
 
-See [Typed RPC](docs/typed_rpc.md) for the public codecs, examples, protocol-v1
-compatibility rules and FF composition, or the [dynamic RPC reference](docs/reference.md#rpc-backend).
+A service declared in a module's `.def` can call a typed endpoint by name.
+Map each generated symbol and signature to a wire method with
+`typed_rpc::direct_import_backend`, then bind the service once.
+`client.add(a, b)` returns a concrete call with `bind_static_async`, or a
+type-erased call with `bind_async`. Both use the same transport reservation,
+wire codec and completion path. [Build a generated async client](docs/typed_rpc.md#generated-async-imports)
+
+With typed RPC, `make_rpc_invocation<Method>` prepares an owning frame for a
+byte-vector transport. `make_direct_rpc_invocation<Method>` takes ownership of
+the arguments and lets a transport encode directly into reserved send space.
+Both return a concrete, move-only call that you can start with
+`std::move(call).start(handler)`.
+
+When a queue needs to hold different operation types with the same result,
+use `portal::invocation<R>`. For example, this function accepts a shared
+transport implementing `async_round_trip_into(request, callback)`:
+
+```cpp
+#include <portal/rpc/typed_async.h>
+
+using Add = portal::typed_rpc::method<1, 1, portal::wire::i32,
+                                      portal::wire::i32, portal::wire::i32>;
+
+template<class Transport>
+portal::invocation<std::int32_t> queued_add(std::shared_ptr<Transport> transport) {
+    auto call = portal::typed_rpc::make_direct_rpc_invocation<Add>(
+        std::move(transport), {}, std::int32_t{20}, std::int32_t{22});
+    return portal::erase_invocation(std::move(call));
+}
+```
+
+Erasure hides the concrete operation type from the queue. The receiver still
+sees the same typed frame and the caller still gets an `async_result<std::int32_t>`.
+[Async ownership and Flux Foundry integration](docs/typed_rpc.md#async-ownership-and-the-ff-seam)
+
+For IPv4 TCP on Linux and macOS, `<portal/rpc/tcp_sender.h>` provides one
+scatter/gather send API. Linux can use `MSG_ZEROCOPY` for large submissions and
+releases ring space on kernel completion. On macOS, a successful `sendmsg`
+releases the accepted prefix immediately. [TCP sender and buffer lifetime](docs/typed_rpc.md#tcp-send-completion-on-linux-and-macos)
+
+### Runtime registration
+
+On Linux and macOS, a host can use the optional C++17
+`portal::runtime_registration` component to compile a local C++ module and publish
+its typed RPC handlers through Flux Foundry. With a single I/O owner,
+`io_registration_registry` prepares a copy of the routing index on the control
+thread and installs it on the I/O loop. An already resolved call keeps its handler
+pointer across the swap. The shared-worker registry also supports concurrent
+lookup on arbitrary threads. Source builds enable this component automatically
+when Flux Foundry, lease and Threads are available. [Module contract, CMake setup and example](docs/runtime_registration.md)
+
+### RPC benchmarks
+
+For 64 KiB typed payloads on a Ryzen 7 3700X, direct encoding reduced median
+in-process time from 5.52 to 3.57 µs per concrete call and from 5.54 to 3.62 µs
+per erased call. At 16 bytes both direct paths took longer on that machine.
+The benchmark guide includes the dynamic RPC comparison, Intel MacBook Pro
+results, and separate two-host TCP measurements. [Commands and raw samples](benchmarks/typed_rpc/README.md#send-ring-benchmarks)
+
+In a separate synchronous localhost TCP comparison on the 3700X, typed Portal
+and rpclib v2.3.0 measured 13.73 and 25.53 µs p50 for integer addition, and
+73.75 and 83.48 µs for a 64 KiB echo. [Linux and macOS results and benchmark setup](benchmarks/typed_rpc/README.md#portal-and-rpclib-over-tcp)
+
+The TCP comparison also covers FF typed and erased coroutine calls, ring backpressure,
+and rpclib async calls at windows of 1 and 32. [Coroutine benchmark](benchmarks/typed_rpc/README.md#ff-coroutine-calls-over-tcp) The benchmark also pairs an
+FF MessagePack-RPC client with an unmodified rpclib server, and measures the
+same protocol with the benchmark I/O loop running the rpclib dispatcher. [rpclib on FF](benchmarks/typed_rpc/README.md#rpclib-on-the-ff-transport)
+
+With 32 scalar calls in flight on the 3700X, the generated concrete C++ client
+completed 157.50k calls/s and the direct invocation completed 158.34k. On the
+Intel Mac the corresponding rates were 149.75k and 149.57k. The benchmark also
+covers erased views and the single-request latency cost. [Generated imports over FF and TCP](benchmarks/typed_rpc/README.md#generated-c-imports-over-ff-and-tcp)
 
 ## Use With CMake
 

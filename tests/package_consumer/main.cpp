@@ -3,6 +3,9 @@
 #include <portal/backends/rpc.h>
 #include <portal/backends/rpc_reuse.h>
 #include <portal/rpc/typed_async.h>
+#if defined(__linux__) || defined(__APPLE__)
+#include <portal/rpc/tcp_sender.h>
+#endif
 
 #include <cstdint>
 #include <string>

@@ -10,6 +10,7 @@ owning asynchronous transport adapter.
 | `<portal/wire/schema.h>` | `portal::wire` codecs, limits, results and `PORTAL_WIRE_RECORD` |
 | `<portal/rpc/typed.h>` | `portal::typed_rpc::method`, `router`, `workspace`, `call` and frame helpers |
 | `<portal/rpc/typed_async.h>` | `make_rpc_invocation`, typed error category and owning async adapter |
+| `<portal/rpc/typed_import.h>` | `direct_import_backend` maps generated async imports to a writable typed transport |
 
 ## Choose an RPC style
 
@@ -77,12 +78,61 @@ Method descriptors expose `id`, `revision` and `arity`; codecs expose `min_size`
 These constants support value and reference use in C++14, including forwarding
 APIs such as `vector::emplace_back`, across translation units.
 
-**The existing Portal `.def`/backend lowering mechanism is not replaced or
-transparently intercepted.** Typed RPC exposes an explicit
-method descriptor; its `signature_t` is a projection, not a completed general
-`backend_base` contract-aware invocation hook. Legacy first-viable overloads
-remain legacy semantics. Typed methods select one explicit signature before
-encoding; use distinct IDs/revisions when exposing distinct wire contracts.
+### Generated async imports
+
+Use `<portal/rpc/typed_import.h>` to connect a module's generated async
+imports to a typed transport with writable send buffers. This module declares
+its calculator in `import.def`.
+
+```cpp
+BEGIN_CLASS(calculator)
+BEGIN_MEMBER_CALLABLE_GROUP(add)
+DECL_MEMBER_FUNCTION(std::int32_t, std::int32_t, std::int32_t)
+END_MEMBER_CALLABLE_GROUP
+END_CLASS
+```
+
+Map the generated symbol and its selected C++ signature to the deployed method
+descriptor. The following example uses the `Add` descriptor above.
+
+```cpp
+#include <portal/rpc/typed_import.h>
+#define PORTAL_IMPORT_DEF "my_module/import.def"
+#include <portal/import.h>
+#undef PORTAL_IMPORT_DEF
+
+template<class Symbol, class Signature> struct routes;
+template<> struct routes<portal::import_symbols::calculator::add, Add::signature_t> {
+    using type = Add;
+};
+
+template<class Transport>
+auto make_calculator(std::shared_ptr<Transport> io) {
+    using context = typename portal::typed_rpc::direct_import_backend<Transport, routes>::context;
+    using service = portal::calculator<context>;
+    auto owner = std::make_shared<context>(std::move(io));
+    return portal::bind_static_async<portal::calculator>(owner, typename service::object_t{});
+}
+
+// Use the connected transport at the call site.
+auto client = make_calculator(io);
+auto call = client.add(std::int32_t{20}, std::int32_t{22});
+```
+
+The concrete call supports `std::move(call).start(handler)` and FF's
+`await_static_invocation`. Use `bind_async` for an erased service view.
+Generated free functions use the same mapping through
+`portal::async_functions::name<false>(owner, args...)` (concrete) or
+`name(owner, args...)` (erased). Each mapped method has a compile-time
+signature check. Overloads can map to separate deployed IDs. Use the declared
+signature, including argument reference qualifiers, as the route key. Captured
+values must match the wire codec types. User-defined values need an owning
+`portal::async_capture<T>` specialization. A `wire::none` method completes
+the generated call with `async_result<void>`.
+
+Service views address the endpoint in their context. A call owns the transport
+and its captured arguments and copies the context's wire limits at preparation.
+The dynamic backend continues to use its own declarations and overload rules.
 
 ## Synchronous owning calls
 
@@ -112,7 +162,8 @@ to or retain a reference to the previous buffer. Transport exceptions propagate.
 `workspace` is confined to one worker, not internally synchronized. Every
 active/reentrant call takes separate buffers. The caller must keep the workspace
 alive until every active scope returns. Registration finishes before concurrent
-router use; native bound functions must support the selected concurrency.
+router use; `router::dispatch_into` and `loopback_transport` accept `const router&`,
+and native bound functions must be `const`-invocable and safe for the selected concurrency.
 
 Cached buffers retain initialized byte elements, not just capacity. A successful
 encoder resizes to the exact new frame size and overwrites **every** published
@@ -254,6 +305,28 @@ synchronous workspace. The adapter decodes an owning result before delivery.
 `start()` is reached. A field/size preparation error is delivered as rejection
 when started.
 
+For a transport with writable send buffers, use `make_direct_rpc_invocation<Method>`
+with the same arguments. It measures the request and takes an owning snapshot at
+construction. Passing an lvalue copies it, and passing an rvalue permits moving
+its storage. As with other concrete invocations, the operation must move without
+throwing. Both the concrete call and `erase_invocation(std::move(call))` use the
+same transport hook:
+
+```cpp
+template<class Method, class Callback>
+portal::async_submission async_round_trip_into(
+    rpc::prepared_request<Method> request, Callback done);
+```
+
+The transport can keep the request while waiting for capacity. Reserve exactly
+`request.size()` bytes and construct a `wire::writer(first, n, second, m)` over
+the two writable ranges, where `n + m == request.size()`. For a contiguous range
+use the two-argument writer. Publish the reservation only when
+`request.write(writer) == wire::errc::ok`. A failed write can leave unpublished
+bytes in the reservation. The completion and response ownership rules above apply
+to this hook as well. The experimental SPSC ring uses `try_write_typed` for
+immediate publication and `async_write_typed` for FF backpressure.
+
 This uses the **existing** concrete `static_invocation` state, including its
 local completion-token pin and delivery/retirement rules. It introduces no
 additional shared operation state, `std::function`, blueprint or handler slot.
@@ -268,6 +341,42 @@ existing `portal::ff::await_static_invocation<Call>()`, followed by a fresh
 `tests/typed_rpc/ff_test.cpp` for a complete deferred-completion/rejection gate.
 The test uses actual FF headers and covers deferred completion and rejection.
 CI requires this integration test using its pinned FF checkout.
+
+## TCP send completion on Linux and macOS
+
+A transport using an IPv4 TCP socket can include `<portal/rpc/tcp_sender.h>`
+and construct one `portal::rpc::tcp_sender sender(fd)`. The header selects the
+implementation at compile time. Both dynamic and typed RPC can pass their encoded
+bytes to it. The sender borrows the descriptor and accepts up to two spans.
+
+On macOS, `sendmsg` copies the accepted prefix. Every successful send returns
+`released == accepted`, including short writes across the two spans. The sender
+sets `SO_NOSIGPIPE` on the socket so a disconnected peer produces a send error.
+The option stays set on the borrowed socket.
+
+On Linux, the default tries `MSG_ZEROCOPY` for sends of at least 65,535 bytes.
+This cutoff matches the tested large send. Pass a different byte threshold as
+the second constructor argument to tune it, or zero to select ordinary sends.
+If the installed headers or socket lack support, sends use ordinary `sendmsg`.
+A zero-copy send rejected with `ENOBUFS` retries that submission with a copy.
+Existing Linux callers may also use `portal/rpc/linux_tcp_sender.h`.
+
+Use a fresh socket with one I/O owner. On Linux the sender also needs exclusive
+access to its error queue. For an ordered byte ring:
+
+1. Pass the next unsent spans to `sender.send(first, second)`. Advance the submit
+   position by `accepted`, including after short writes. Advance the reclaim
+   position by `released`. The two counts can differ.
+2. On `POLLERR` with outstanding submissions, call `sender.reap()`. Apply its
+   `released` count even if a later notification in that call returned an error.
+   Retire only that contiguous prefix. Drive the existing producer wakeup from
+   this position. Socket errors are reported through `progress::error`.
+3. For a nonblocking socket, retry after writability on socket backpressure.
+   If `sender.window_full()` is true, drain completions to make space for further
+   zero-copy submissions. The sender can track up to 64 such submissions.
+4. Stop submitting on shutdown and drain outstanding completions before
+   closing the socket or recycling the backing storage. A timeout or socket
+   error leaves unreleased bytes subject to the same lifetime requirement.
 
 ## Build and validation gates
 
