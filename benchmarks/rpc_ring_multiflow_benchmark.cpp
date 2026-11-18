@@ -99,7 +99,7 @@ class producers {
         auto& flow = flows_[id];
         const auto end = std::min(count_, flow.sent + quantum_);
         while (flow.sent < end) {
-            const auto status = flow.publish<Async>();
+            const auto status = flow.template publish<Async>();
             if (status == write_status::full) {
                 check(Async);
                 auto runner = ff::make_fast_runner_view(blueprint_, resumed{this, id});
