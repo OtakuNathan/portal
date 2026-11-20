@@ -3,20 +3,31 @@
 #include "typed.h"
 #include "../async.h"
 
-namespace portal { namespace typed_rpc {
+namespace portal {
+namespace typed_rpc {
 class error_category final : public std::error_category {
 public:
-    const char* name() const noexcept override { return "portal.typed_rpc"; }
+    const char* name() const noexcept override {
+        return "portal.typed_rpc";
+    }
     std::string message(int e) const override {
         switch (static_cast<errc>(e)) {
-        case errc::ok: return "success";
-        case errc::malformed: return "malformed typed RPC frame";
-        case errc::limit_exceeded: return "typed RPC limit exceeded";
-        case errc::invalid_value: return "invalid typed RPC value";
-        case errc::unknown_method: return "unknown typed RPC method";
-        case errc::incompatible_schema: return "incompatible typed RPC schema";
-        case errc::handler_failed: return "typed RPC handler failed";
-        case errc::transport_failed: return "typed RPC transport failed";
+        case errc::ok:
+            return "success";
+        case errc::malformed:
+            return "malformed typed RPC frame";
+        case errc::limit_exceeded:
+            return "typed RPC limit exceeded";
+        case errc::invalid_value:
+            return "invalid typed RPC value";
+        case errc::unknown_method:
+            return "unknown typed RPC method";
+        case errc::incompatible_schema:
+            return "incompatible typed RPC schema";
+        case errc::handler_failed:
+            return "typed RPC handler failed";
+        case errc::transport_failed:
+            return "typed RPC transport failed";
         }
         return "unknown typed RPC error";
     }
@@ -27,43 +38,62 @@ inline std::error_code make_error_code(errc e) noexcept {
 }
 // A transport may retain the argument snapshot while its output queue is full.
 // Only call write() with a reservation of exactly size() bytes.
-template<class Method> class prepared_request {
+template <class Method>
+class prepared_request {
     wire::measure measured_;
     optional<typename Method::arguments> arguments_;
+
 public:
-    template<class... A> explicit prepared_request(limits budget, A&&... args)
+    template <class... A>
+    explicit prepared_request(limits budget, A&&... args)
         : measured_(detail::measure_request<Method>(budget, args...)) {
-        if (error() == errc::ok) arguments_.emplace(std::forward<A>(args)...);
+        if (error() == errc::ok)
+            arguments_.emplace(std::forward<A>(args)...);
     }
-    std::size_t size() const noexcept { return measured_.size(); }
-    errc error() const noexcept { return measured_.error(); }
+    std::size_t size() const noexcept {
+        return measured_.size();
+    }
+    errc error() const noexcept {
+        return measured_.error();
+    }
     errc write(wire::writer& w) const noexcept {
-        if (error() != errc::ok) return error();
+        if (error() != errc::ok)
+            return error();
         return detail::write_request<Method>(w, size(), *arguments_);
     }
 };
 namespace detail {
-template<class R> struct response_value {
-    static async_result<R> take(R&& value) noexcept { return async_result<R>(std::move(value)); }
+template <class R>
+struct response_value {
+    static async_result<R> take(R&& value) noexcept {
+        return async_result<R>(std::move(value));
+    }
 };
-template<> struct response_value<void> {
-    static async_result<void> take(wire::unit) noexcept { return {}; }
+template <>
+struct response_value<void> {
+    static async_result<void> take(wire::unit) noexcept {
+        return {};
+    }
 };
-template<class Method, class Token, class R = typename Method::result_type> struct response_completion {
+template <class Method, class Token, class R = typename Method::result_type>
+struct response_completion {
     Token token;
     limits budget;
     // Transport moves the final response here. Decoding finishes before the
     // frame is destroyed; no view escapes into an FF continuation.
     void operator()(bytes response, async_error error = {}) const noexcept {
         if (error.code || error.exception) {
-            token.finish(async_result<R>(async_error_tag, std::move(error))); return;
+            token.finish(async_result<R>(async_error_tag, std::move(error)));
+            return;
         }
 #if PORTAL_HAS_EXCEPTIONS
         try {
 #endif
             auto decoded = decode_response<Method>(view(response), budget);
-            if (decoded) token.finish(response_value<R>::take(std::move(decoded.value)));
-            else token.finish(async_result<R>(async_error_tag, make_error_code(decoded.error)));
+            if (decoded)
+                token.finish(response_value<R>::take(std::move(decoded.value)));
+            else
+                token.finish(async_result<R>(async_error_tag, make_error_code(decoded.error)));
 #if PORTAL_HAS_EXCEPTIONS
         } catch (...) {
             token.finish(async_result<R>(async_error_tag, std::current_exception()));
@@ -72,59 +102,66 @@ template<class Method, class Token, class R = typename Method::result_type> stru
         // Do not access *this after finish: the handler can destroy this callback.
     }
 };
-template<class Method> struct request_operation {
+template <class Method>
+struct request_operation {
     bytes request;
     limits budget;
     errc preparation;
-    template<class Transport, class Token>
-    async_submission operator()(Transport& transport, Token token)
-        noexcept(noexcept(transport.async_round_trip(
-            std::declval<bytes>(), std::declval<response_completion<Method, Token>>()))) {
-        if (preparation != errc::ok) return async_submission::reject(make_error_code(preparation));
+    template <class Transport, class Token>
+    async_submission operator()(Transport& transport, Token token) noexcept(
+        noexcept(transport.async_round_trip(std::declval<bytes>(),
+                                            std::declval<response_completion<Method, Token>>()))) {
+        if (preparation != errc::ok)
+            return async_submission::reject(make_error_code(preparation));
         // The transport takes ownership of the byte vector. No worker-local
         // workspace is lent to an asynchronous operation.
-        return transport.async_round_trip(std::move(request),
-            response_completion<Method, Token>{std::move(token), budget});
+        return transport.async_round_trip(
+            std::move(request), response_completion<Method, Token>{std::move(token), budget});
     }
 };
-template<class Method, class R = typename Method::result_type> struct direct_request_operation {
+template <class Method, class R = typename Method::result_type>
+struct direct_request_operation {
     prepared_request<Method> request;
     limits budget;
-    template<class Transport, class Token>
-    async_submission operator()(Transport& transport, Token token)
-        noexcept(noexcept(transport.async_round_trip_into(
-            std::move(request), std::declval<response_completion<Method, Token, R>>()))) {
+    template <class Transport, class Token>
+    async_submission operator()(Transport& transport, Token token) noexcept(noexcept(
+        transport.async_round_trip_into(std::move(request),
+                                        std::declval<response_completion<Method, Token, R>>()))) {
         if (request.error() != errc::ok)
             return async_submission::reject(make_error_code(request.error()));
-        return transport.async_round_trip_into(std::move(request),
-            response_completion<Method, Token, R>{std::move(token), budget});
+        return transport.async_round_trip_into(
+            std::move(request), response_completion<Method, Token, R>{std::move(token), budget});
     }
 };
 
-template<class Method, class R, class Transport, class... A>
+template <class Method, class R, class Transport, class... A>
 auto make_direct_call(std::shared_ptr<Transport> transport, limits budget, A&&... args) {
-    return portal::make_invocation<R>(std::move(transport), direct_request_operation<Method, R>{
-        prepared_request<Method>(budget, std::forward<A>(args)...), budget});
+    return portal::make_invocation<R>(
+        std::move(transport),
+        direct_request_operation<Method, R>{
+            prepared_request<Method>(budget, std::forward<A>(args)...), budget});
 }
 
-}
+} // namespace detail
 // The existing static_invocation is the one owner of delivery/retirement state.
 // No additional std::function/shared_ptr state is introduced by this adapter.
 // Accepted transport submissions must make exactly one terminal callback;
 // rejected/throwing submissions must retain no callback and never call it.
 // A callback can execute inline, including before async_round_trip returns.
-template<class Method, class Transport, class... A>
+template <class Method, class Transport, class... A>
 auto make_rpc_invocation(std::shared_ptr<Transport> transport, limits budget, const A&... args) {
     bytes request;
     const auto status = encode_request<Method>(request, budget, args...);
-    return portal::make_invocation<typename Method::result_type>(std::move(transport),
+    return portal::make_invocation<typename Method::result_type>(
+        std::move(transport),
         detail::request_operation<Method>{std::move(request), budget, status});
 }
-template<class Method, class Transport, class... A>
+template <class Method, class Transport, class... A>
 auto make_direct_rpc_invocation(std::shared_ptr<Transport> transport, limits budget, A&&... args) {
     return detail::make_direct_call<Method, typename Method::result_type>(
         std::move(transport), budget, std::forward<A>(args)...);
 }
 
-}}
+} // namespace typed_rpc
+} // namespace portal
 #endif

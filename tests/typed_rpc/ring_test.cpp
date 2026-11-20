@@ -14,15 +14,17 @@ static_assert(alignof(rb::byte_ring) <= alignof(std::max_align_t),
 
 static void pad(rb::byte_ring& ring, std::size_t size) {
     w::bytes filler(size, 0xaa);
-    CHECK(ring.try_write(size, [&](auto& writer) { writer.append(filler.data(), size); })
-          == rb::write_status::published);
+    CHECK(ring.try_write(size, [&](auto& writer) {
+        writer.append(filler.data(), size);
+    }) == rb::write_status::published);
 }
 static w::bytes drain(rb::byte_ring& ring) {
     w::bytes frame;
     while (ring.read([&](const std::uint8_t* data, std::size_t count) {
         frame.insert(frame.end(), data, data + count);
         return count;
-    })) {}
+    })) {
+    }
     return frame;
 }
 
@@ -60,27 +62,33 @@ static void check_reservations() {
 struct transport {
     rb::byte_ring ring{128, 64};
     tr::router server;
-    decltype(ff::make_blueprint<rb::space_request, portal::async_error>()
-        | ff::await<rb::ring_space_awaitable>() | ff::end()) blueprint =
-        ff::make_blueprint<rb::space_request, portal::async_error>()
-        | ff::await<rb::ring_space_awaitable>() | ff::end();
+    decltype(ff::make_blueprint<rb::space_request, portal::async_error>() |
+             ff::await<rb::ring_space_awaitable>() | ff::end()) blueprint =
+        ff::make_blueprint<rb::space_request, portal::async_error>() |
+        ff::await<rb::ring_space_awaitable>() | ff::end();
     unsigned submissions = 0;
-    transport() { bind(server); }
+    transport() {
+        bind(server);
+    }
 
-    template<class Method, class H>
+    template <class Method, class H>
     portal::async_submission async_round_trip_into(tr::prepared_request<Method> request, H done) {
         ++submissions;
-        rb::async_write_typed(ring, blueprint, std::move(request), [this, done](portal::async_error e) noexcept {
-            w::bytes reply;
-            if (!e.code && !e.exception) CHECK(server.dispatch_into(drain(ring), reply) == w::errc::ok);
-            done(std::move(reply), std::move(e));
-        });
+        rb::async_write_typed(
+            ring, blueprint, std::move(request), [this, done](portal::async_error e) noexcept {
+                w::bytes reply;
+                if (!e.code && !e.exception)
+                    CHECK(server.dispatch_into(drain(ring), reply) == w::errc::ok);
+                done(std::move(reply), std::move(e));
+            });
         return portal::async_submission::accept();
     }
 };
 
-template<class Symbol, class Signature> struct routes;
-template<> struct routes<portal::import_symbols::typed_service::echo, std::string(const std::string&)> {
+template <class Symbol, class Signature>
+struct routes;
+template <>
+struct routes<portal::import_symbols::typed_service::echo, std::string(const std::string&)> {
     using type = Echo;
 };
 
@@ -94,8 +102,10 @@ static void check_async(bool erased, bool stop) {
     auto endpoint = std::make_shared<context>(t);
     unsigned count = 0;
     auto handler = [&](portal::async_result<std::string> r) noexcept {
-        if (stop) CHECK(!r.has_value() && r.error.code == std::errc::operation_canceled);
-        else CHECK(r.has_value() && *r.value == expected);
+        if (stop)
+            CHECK(!r.has_value() && r.error.code == std::errc::operation_canceled);
+        else
+            CHECK(r.has_value() && *r.value == expected);
         ++count;
     };
     auto start = [&](const auto& client) {
@@ -103,11 +113,14 @@ static void check_async(bool erased, bool stop) {
         source.assign(57, 'b');
         std::move(call).start(handler);
     };
-    if (erased) start(portal::bind_async<portal::typed_service>(endpoint, service::object_t{}));
-    else start(portal::bind_static_async<portal::typed_service>(endpoint, service::object_t{}));
+    if (erased)
+        start(portal::bind_async<portal::typed_service>(endpoint, service::object_t{}));
+    else
+        start(portal::bind_static_async<portal::typed_service>(endpoint, service::object_t{}));
     endpoint.reset();
     CHECK(count == 0 && t->ring.producer_paused());
-    if (stop) t->ring.stop_async_waits();
+    if (stop)
+        t->ring.stop_async_waits();
     CHECK(drain(t->ring) == w::bytes(123, 0xaa));
     CHECK(count == 1 && !t->ring.producer_paused() && t->submissions == 1);
     t->ring.stop_async_waits();
@@ -116,7 +129,9 @@ static void check_async(bool erased, bool stop) {
 
 int main() {
     check_reservations();
-    for (bool erased : {false, true}) for (bool stop : {false, true}) check_async(erased, stop);
+    for (bool erased : {false, true})
+        for (bool stop : {false, true})
+            check_async(erased, stop);
 
     auto t = std::make_shared<transport>();
     unsigned failures = 0;

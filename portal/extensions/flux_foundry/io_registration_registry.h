@@ -8,31 +8,35 @@
 #include <list>
 #include <thread>
 
-namespace portal { namespace ff {
+namespace portal {
+namespace ff {
 // Construct, resolve requests and install updates on the owning I/O thread.
 // Join all preparations, queued updates and handler calls before destruction.
 class io_registration_registry {
     using router = typed_rpc::router;
     struct batch {
         std::shared_ptr<void> module;
-        router::handler_storage handlers; // Destroy module-defined handlers before releasing the pin.
+        router::handler_storage
+            handlers; // Destroy module-defined handlers before releasing the pin.
     };
     struct staging {
         std::list<batch> batches;
         router::index index;
 
-        template<class Register>
+        template <class Register>
         bool build(const router::index& current, std::shared_ptr<void> module, Register&& define) {
             batches.emplace_back();
             auto& batch = batches.front();
             batch.module = std::move(module);
             router additions;
-            if (define(additions) != wire::errc::ok) return false;
+            if (define(additions) != wire::errc::ok)
+                return false;
             if (additions.size() == 0) {
                 batches.clear();
                 return true;
             }
-            if (current.extend(additions, index) != wire::errc::ok) return false;
+            if (current.extend(additions, index) != wire::errc::ok)
+                return false;
             batch.handlers = std::move(additions).take_handlers();
             return true;
         }
@@ -41,6 +45,7 @@ class io_registration_registry {
     std::list<batch> owners_;
     router::index current_;
     std::atomic_flag preparing_ = ATOMIC_FLAG_INIT;
+
 public:
     enum class status { ok, busy, rejected, wrong_thread, not_delivered };
     class update {
@@ -52,17 +57,25 @@ public:
             : owner_(owner), result_(result) {}
         void release() noexcept {
             next_.reset();
-            if (owner_) std::exchange(owner_, nullptr)->preparing_.clear(std::memory_order_release);
+            if (owner_)
+                std::exchange(owner_, nullptr)->preparing_.clear(std::memory_order_release);
         }
+
     public:
         update(update&& other) noexcept
             : owner_(std::exchange(other.owner_, nullptr)), next_(std::move(other.next_)),
               result_(std::exchange(other.result_, status::rejected)) {}
-        ~update() { release(); }
-        status result() const noexcept { return result_; }
+        ~update() {
+            release();
+        }
+        status result() const noexcept {
+            return result_;
+        }
         status install() && noexcept {
-            if (result_ != status::ok) return result_;
-            if (!owner_) return status::rejected;
+            if (result_ != status::ok)
+                return result_;
+            if (!owner_)
+                return status::rejected;
             if (owner_->io_thread_ != std::this_thread::get_id()) {
                 result_ = status::wrong_thread;
             } else if (!next_->batches.empty()) {
@@ -74,9 +87,10 @@ public:
         }
     };
 
-    template<class Register>
+    template <class Register>
     update prepare(std::shared_ptr<void> module, Register&& define) {
-        if (preparing_.test_and_set(std::memory_order_acquire)) return update(nullptr, status::busy);
+        if (preparing_.test_and_set(std::memory_order_acquire))
+            return update(nullptr, status::busy);
         update job(this, status::ok);
         job.next_ = std::make_unique<staging>();
         if (!job.next_->build(current_, std::move(module), std::forward<Register>(define))) {
@@ -93,5 +107,6 @@ public:
         return resolve(wire::view(frame), l).dispatch_into(reply);
     }
 };
-}}
+} // namespace ff
+} // namespace portal
 #endif

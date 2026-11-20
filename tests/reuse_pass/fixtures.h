@@ -22,28 +22,33 @@ struct add {
     using signature_t = int(int, int);
     result call_optional(const value& a, const value& b) {
         if (a.kind() != portal::rpc::value_kind::signed_integer ||
-            b.kind() != portal::rpc::value_kind::signed_integer) return {};
+            b.kind() != portal::rpc::value_kind::signed_integer)
+            return {};
         return value::signed_integer(a.as_signed() + b.as_signed());
     }
 };
 struct echo {
     using signature_t = std::string(std::string);
     result call_optional(value& a) {
-        if (a.kind() != portal::rpc::value_kind::string) return {};
+        if (a.kind() != portal::rpc::value_kind::string)
+            return {};
         return value::string(a.take_string());
     }
 };
 struct length {
     using signature_t = int(std::string);
     result call_optional(const value& a) {
-        if (a.kind() != portal::rpc::value_kind::string) return {};
+        if (a.kind() != portal::rpc::value_kind::string)
+            return {};
         return value::unsigned_integer(a.string_size());
     }
 };
 struct callback {
     using signature_t = int(int);
     std::function<result(value&)> fn;
-    result call_optional(value& a) { return fn(a); }
+    result call_optional(value& a) {
+        return fn(a);
+    }
 };
-}
+} // namespace reuse_test
 #endif

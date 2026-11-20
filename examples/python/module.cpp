@@ -7,13 +7,8 @@
 #include <exception>
 
 namespace {
-    PyModuleDef module_definition = {
-        PyModuleDef_HEAD_INIT,
-        "portal_python_example",
-        nullptr,
-        -1,
-        nullptr
-    };
+PyModuleDef module_definition = {PyModuleDef_HEAD_INIT, "portal_python_example", nullptr, -1,
+                                 nullptr};
 }
 
 PyMODINIT_FUNC PyInit_portal_python_example() {
@@ -24,9 +19,8 @@ PyMODINIT_FUNC PyInit_portal_python_example() {
 
     try {
         static portal::py_backend::export_context_t ctx;
-        portal::py_backend::module_t module(
-            module_object,
-            portal::py_backend::ref_policy::borrowed);
+        portal::py_backend::module_t module(module_object,
+                                            portal::py_backend::ref_policy::borrowed);
 
         portal::export_add(ctx, module, portal::example_native::add);
         portal::exports::counter::register_all(ctx, module);

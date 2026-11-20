@@ -12,12 +12,18 @@ using backend = portal::py_backend;
 using ref = backend::object_ref;
 constexpr auto owned = backend::ref_policy::owned;
 
-namespace portal { namespace native {
+namespace portal {
+namespace native {
 class counter {
 public:
     explicit counter(unsigned value) : value_(value) {}
-    int value() const { return static_cast<int>(value_); }
-    int add(int n) const { return value() + n; }
+    int value() const {
+        return static_cast<int>(value_);
+    }
+    int add(int n) const {
+        return value() + n;
+    }
+
 private:
     unsigned value_;
 };
@@ -27,13 +33,16 @@ public:
     consumer(counter& source, Callback& callback) {
         portal::call_callback(callback, source.value());
     }
-    int combine(counter& source, int n) const { return source.add(n); }
+    int combine(counter& source, int n) const {
+        return source.add(n);
+    }
     template <typename Callback>
     int apply(Callback& callback, int n) const {
         return portal::call_callback(callback, n);
     }
 };
-}}
+} // namespace native
+} // namespace portal
 
 namespace {
 void require(bool condition, const char* message) {
@@ -97,7 +106,7 @@ void run_script(PyObject* globals, const char* script) {
 void run() {
     ref globals(PyDict_New(), owned);
     require(PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins()) == 0,
-        "cannot initialize globals");
+            "cannot initialize globals");
     run_script(globals.get(), R"py(
 import gc
 import sys
@@ -159,16 +168,19 @@ def success(*args):
     backend::module_t module(PyModule_New("exception_test"), owned);
     portal::exports::counter::register_all(ctx, module);
     portal::exports::consumer::register_all(ctx, module);
-    using callback_sig = int(portal::callable_param<
-        portal::import_symbols::callback, portal::import_t>, int);
+    using callback_sig =
+        int(portal::callable_param<portal::import_symbols::callback, portal::import_t>, int);
     portal::export_use_callback<callback_sig>(ctx, module, [](auto& cb, int n) {
         return portal::call_callback(cb, n);
     });
     portal::export_calc(ctx, module)
-        .bind<int(int)>([&](int n) { return portal::call_callback(raising, n); })
+        .bind<int(int)>([&](int n) {
+            return portal::call_callback(raising, n);
+        })
         .bind<int(int, unsigned)>([&](int n, unsigned m) {
             return portal::call_calc(raising, n, m);
-        }).commit();
+        })
+        .commit();
     portal::export_free_callable<void(int)>(ctx, module, "voidRaise", [&](int n) {
         portal::call_foo(raising, n);
     });
@@ -189,7 +201,9 @@ def success(*args):
     });
     portal::export_free_callable<int(int)>(ctx, module, "unwind", [&](int n) {
         struct cleanup {
-            ~cleanup() { PyErr_SetString(PyExc_KeyError, "cleanup changed pending error"); }
+            ~cleanup() {
+                PyErr_SetString(PyExc_KeyError, "cleanup changed pending error");
+            }
         } guard;
         return portal::call_callback(raising, n);
     });
@@ -275,7 +289,7 @@ assert m.use_callback(success, 1) == 42
 )py");
     require(!PyErr_Occurred(), "pending Python error after tests");
 }
-}
+} // namespace
 
 int main() {
     Py_Initialize();
@@ -288,10 +302,12 @@ int main() {
         status = 1;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "%s\n", error.what());
-        if (PyErr_Occurred()) PyErr_Print();
+        if (PyErr_Occurred())
+            PyErr_Print();
         status = 1;
     }
     // All C++ Python owners, including active exception objects, are gone.
-    if (Py_FinalizeEx() != 0) status = 1;
+    if (Py_FinalizeEx() != 0)
+        status = 1;
     return status;
 }

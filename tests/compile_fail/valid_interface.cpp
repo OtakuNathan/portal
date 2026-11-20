@@ -5,13 +5,11 @@
 struct compile_context {
     struct backend_t {
         template <typename, typename>
-        struct object_t {
-        };
+        struct object_t {};
     };
 };
 
 static_assert(sizeof(portal::subject<compile_context>) > 0,
-    "a valid generated interface must compile");
+              "a valid generated interface must compile");
 
-int main() {
-}
+int main() {}

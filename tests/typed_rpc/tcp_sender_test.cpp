@@ -65,7 +65,8 @@ static void unavailable_and_short_write() {
     CHECK(!sent.error && sent.accepted > 0 && sent.accepted < payload.size());
     CHECK(sent.accepted == sent.released && !sender.outstanding_bytes());
     const auto blocked = sender.send(w::view(payload));
-    CHECK(blocked.error == std::errc::operation_would_block && !blocked.accepted && !blocked.released);
+    CHECK(blocked.error == std::errc::operation_would_block && !blocked.accepted &&
+          !blocked.released);
     CHECK(!sender.stats().zero_copy_sends);
     ::close(pair[1]);
     const auto closed = sender.send(w::view(payload));

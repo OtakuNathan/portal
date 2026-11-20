@@ -8,19 +8,33 @@ using result_t = const int&;
 #else
 using result_t = int&&;
 #endif
-struct callable { int operator()() const { return 7; } };
+struct callable {
+    int operator()() const {
+        return 7;
+    }
+};
 struct backend : portal::backend_base<backend> {
     using dynamic_value_t = int;
-    template<class T> struct converter {
-        template<class Context> static int to(Context&, T value) { return value; }
-        template<class Context> static portal::optional<T> from(Context&, int value) { return portal::optional<T>(value); }
+    template <class T>
+    struct converter {
+        template <class Context>
+        static int to(Context&, T value) {
+            return value;
+        }
+        template <class Context>
+        static portal::optional<T> from(Context&, int value) {
+            return portal::optional<T>(value);
+        }
     };
-    template<class R, class Context> static R invoke_impl(Context&, portal::no_receiver_t) {
+    template <class R, class Context>
+    static R invoke_impl(Context&, portal::no_receiver_t) {
         static int value = 1;
         return static_cast<R>(value);
     }
 };
-struct context { using backend_t = backend; };
+struct context {
+    using backend_t = backend;
+};
 struct receiver {};
 using contract = portal::free_callable<result_t()>;
 int main() {

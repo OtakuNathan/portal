@@ -11,33 +11,32 @@ using py_context_t = portal::py_backend::context_t;
 using py_export_context_t = portal::py_backend::export_context_t;
 
 namespace portal {
-    namespace native {
-        class counter {
-        public:
-            static int constructed;
-            static int destroyed;
+namespace native {
+class counter {
+public:
+    static int constructed;
+    static int destroyed;
 
-            int handle = 13;
+    int handle = 13;
 
-            explicit counter(unsigned initial_handle)
-                : handle(static_cast<int>(initial_handle)) {
-                ++constructed;
-            }
-
-            ~counter() {
-                ++destroyed;
-            }
-
-            int add(int value) const noexcept {
-                return handle + value;
-            }
-
-            int value() const noexcept {
-                return handle;
-            }
-        };
+    explicit counter(unsigned initial_handle) : handle(static_cast<int>(initial_handle)) {
+        ++constructed;
     }
-}
+
+    ~counter() {
+        ++destroyed;
+    }
+
+    int add(int value) const noexcept {
+        return handle + value;
+    }
+
+    int value() const noexcept {
+        return handle;
+    }
+};
+} // namespace native
+} // namespace portal
 
 int portal::native::counter::constructed = 0;
 int portal::native::counter::destroyed = 0;
@@ -45,221 +44,178 @@ int portal::native::counter::destroyed = 0;
 using owned_counter = portal::native::counter;
 
 namespace {
-    int stored_value = 0;
+int stored_value = 0;
 
-    int add_function(int a, unsigned b) {
-        return a + static_cast<int>(b);
-    }
-
-    int scale_by_ten_function(int value) {
-        return value * 10;
-    }
-
-    void store_function(int value) {
-        stored_value = value;
-    }
-
-    struct multiply_function {
-        int operator()(int a, unsigned b) const {
-            return a * static_cast<int>(b);
-        }
-    };
-
-    int stored_function() {
-        return stored_value;
-    }
-
-    int owned_counter_constructed() {
-        return owned_counter::constructed;
-    }
-
-    int owned_counter_destroyed() {
-        return owned_counter::destroyed;
-    }
-
-    PyObject* raise_error(const char* message) {
-        PyErr_SetString(PyExc_RuntimeError, message);
-        return nullptr;
-    }
-
-    PyObject* raise_error(const std::exception& error) {
-        return raise_error(error.what());
-    }
-
-    PyObject* call_imported_calc(PyObject*, PyObject* args) {
-        try {
-            PyObject* callable = nullptr;
-            int a = 0;
-            unsigned b = 0;
-            if (PyArg_ParseTuple(args, "OiI", &callable, &a, &b) == 0) {
-                return nullptr;
-            }
-
-            py_context_t ctx(callable, portal::py_backend::ref_policy::borrowed);
-            return portal::py_backend::converter<int>::to(
-                ctx,
-                portal::call_calc(ctx, a, b));
-        } catch (const portal::py_backend::python_error& error) {
-            error.restore();
-            return nullptr;
-        } catch (const std::exception& error) {
-            return raise_error(error);
-        }
-    }
-
-    PyObject* call_imported_foo(PyObject*, PyObject* args) {
-        try {
-            PyObject* callable = nullptr;
-            int a = 0;
-            int b = 0;
-            if (PyArg_ParseTuple(args, "Oii", &callable, &a, &b) == 0) {
-                return nullptr;
-            }
-
-            py_context_t ctx(callable, portal::py_backend::ref_policy::borrowed);
-            portal::call_foo(ctx, a, b);
-            Py_RETURN_NONE;
-        } catch (const portal::py_backend::python_error& error) {
-            error.restore();
-            return nullptr;
-        } catch (const std::exception& error) {
-            return raise_error(error);
-        }
-    }
-
-    PyObject* call_imported_echo(PyObject*, PyObject* args) {
-        try {
-            PyObject* callable = nullptr;
-            PyObject* text = nullptr;
-            if (PyArg_ParseTuple(args, "OO", &callable, &text) == 0) {
-                return nullptr;
-            }
-
-            py_context_t ctx(callable, portal::py_backend::ref_policy::borrowed);
-            return portal::py_backend::converter<std::string>::to(
-                ctx,
-                portal::call_echo(ctx, portal::from_cast<std::string>(ctx, text)));
-        } catch (const portal::py_backend::python_error& error) {
-            error.restore();
-            return nullptr;
-        } catch (const std::exception& error) {
-            return raise_error(error);
-        }
-    }
-
-    PyObject* call_imported_counter_add(PyObject*, PyObject* args) {
-        try {
-            PyObject* callable = nullptr;
-            PyObject* receiver = nullptr;
-            int value = 0;
-            if (PyArg_ParseTuple(args, "OOi", &callable, &receiver, &value) == 0) {
-                return nullptr;
-            }
-
-            py_context_t ctx(callable, portal::py_backend::ref_policy::borrowed);
-            auto counter = portal::bind_receiver<portal::counter>(
-                ctx,
-                receiver,
-                portal::py_backend::ref_policy::borrowed);
-            return portal::py_backend::converter<int>::to(ctx, counter.add(value));
-        } catch (const portal::py_backend::python_error& error) {
-            error.restore();
-            return nullptr;
-        } catch (const std::exception& error) {
-            return raise_error(error);
-        }
-    }
-
-    PyObject* call_imported_counter_value(PyObject*, PyObject* args) {
-        try {
-            PyObject* callable = nullptr;
-            PyObject* receiver = nullptr;
-            if (PyArg_ParseTuple(args, "OO", &callable, &receiver) == 0) {
-                return nullptr;
-            }
-
-            py_context_t ctx(callable, portal::py_backend::ref_policy::borrowed);
-            auto counter = portal::bind_receiver<portal::counter>(
-                ctx,
-                receiver,
-                portal::py_backend::ref_policy::borrowed);
-            return portal::py_backend::converter<int>::to(ctx, counter.value());
-        } catch (const portal::py_backend::python_error& error) {
-            error.restore();
-            return nullptr;
-        } catch (const std::exception& error) {
-            return raise_error(error);
-        }
-    }
-
-    PyObject* construct_imported_counter_add(PyObject*, PyObject* args) {
-        try {
-            PyObject* callable = nullptr;
-            unsigned handle = 0;
-            int value = 0;
-            if (PyArg_ParseTuple(args, "OIi", &callable, &handle, &value) == 0) {
-                return nullptr;
-            }
-
-            py_context_t ctx(callable, portal::py_backend::ref_policy::borrowed);
-            auto counter = portal::construct<portal::counter>(ctx, handle);
-            return portal::py_backend::converter<int>::to(ctx, counter.add(value));
-        } catch (const portal::py_backend::python_error& error) {
-            error.restore();
-            return nullptr;
-        } catch (const std::exception& error) {
-            return raise_error(error);
-        }
-    }
-
-    PyMethodDef module_methods[] = {
-        {
-            "callImportedCalc",
-            call_imported_calc,
-            METH_VARARGS,
-            nullptr
-        },
-        {
-            "callImportedFoo",
-            call_imported_foo,
-            METH_VARARGS,
-            nullptr
-        },
-        {
-            "callImportedEcho",
-            call_imported_echo,
-            METH_VARARGS,
-            nullptr
-        },
-        {
-            "callImportedCounterAdd",
-            call_imported_counter_add,
-            METH_VARARGS,
-            nullptr
-        },
-        {
-            "callImportedCounterValue",
-            call_imported_counter_value,
-            METH_VARARGS,
-            nullptr
-        },
-        {
-            "constructImportedCounterAdd",
-            construct_imported_counter_add,
-            METH_VARARGS,
-            nullptr
-        },
-        {nullptr, nullptr, 0, nullptr}
-    };
-
-    PyModuleDef module_def = {
-        PyModuleDef_HEAD_INIT,
-        "portal_python_runtime_addon",
-        nullptr,
-        -1,
-        module_methods
-    };
+int add_function(int a, unsigned b) {
+    return a + static_cast<int>(b);
 }
+
+int scale_by_ten_function(int value) {
+    return value * 10;
+}
+
+void store_function(int value) {
+    stored_value = value;
+}
+
+struct multiply_function {
+    int operator()(int a, unsigned b) const {
+        return a * static_cast<int>(b);
+    }
+};
+
+int stored_function() {
+    return stored_value;
+}
+
+int owned_counter_constructed() {
+    return owned_counter::constructed;
+}
+
+int owned_counter_destroyed() {
+    return owned_counter::destroyed;
+}
+
+PyObject* raise_error(const char* message) {
+    PyErr_SetString(PyExc_RuntimeError, message);
+    return nullptr;
+}
+
+PyObject* raise_error(const std::exception& error) {
+    return raise_error(error.what());
+}
+
+PyObject* call_imported_calc(PyObject*, PyObject* args) {
+    try {
+        PyObject* callable = nullptr;
+        int a = 0;
+        unsigned b = 0;
+        if (PyArg_ParseTuple(args, "OiI", &callable, &a, &b) == 0) {
+            return nullptr;
+        }
+
+        py_context_t ctx(callable, portal::py_backend::ref_policy::borrowed);
+        return portal::py_backend::converter<int>::to(ctx, portal::call_calc(ctx, a, b));
+    } catch (const portal::py_backend::python_error& error) {
+        error.restore();
+        return nullptr;
+    } catch (const std::exception& error) {
+        return raise_error(error);
+    }
+}
+
+PyObject* call_imported_foo(PyObject*, PyObject* args) {
+    try {
+        PyObject* callable = nullptr;
+        int a = 0;
+        int b = 0;
+        if (PyArg_ParseTuple(args, "Oii", &callable, &a, &b) == 0) {
+            return nullptr;
+        }
+
+        py_context_t ctx(callable, portal::py_backend::ref_policy::borrowed);
+        portal::call_foo(ctx, a, b);
+        Py_RETURN_NONE;
+    } catch (const portal::py_backend::python_error& error) {
+        error.restore();
+        return nullptr;
+    } catch (const std::exception& error) {
+        return raise_error(error);
+    }
+}
+
+PyObject* call_imported_echo(PyObject*, PyObject* args) {
+    try {
+        PyObject* callable = nullptr;
+        PyObject* text = nullptr;
+        if (PyArg_ParseTuple(args, "OO", &callable, &text) == 0) {
+            return nullptr;
+        }
+
+        py_context_t ctx(callable, portal::py_backend::ref_policy::borrowed);
+        return portal::py_backend::converter<std::string>::to(
+            ctx, portal::call_echo(ctx, portal::from_cast<std::string>(ctx, text)));
+    } catch (const portal::py_backend::python_error& error) {
+        error.restore();
+        return nullptr;
+    } catch (const std::exception& error) {
+        return raise_error(error);
+    }
+}
+
+PyObject* call_imported_counter_add(PyObject*, PyObject* args) {
+    try {
+        PyObject* callable = nullptr;
+        PyObject* receiver = nullptr;
+        int value = 0;
+        if (PyArg_ParseTuple(args, "OOi", &callable, &receiver, &value) == 0) {
+            return nullptr;
+        }
+
+        py_context_t ctx(callable, portal::py_backend::ref_policy::borrowed);
+        auto counter = portal::bind_receiver<portal::counter>(
+            ctx, receiver, portal::py_backend::ref_policy::borrowed);
+        return portal::py_backend::converter<int>::to(ctx, counter.add(value));
+    } catch (const portal::py_backend::python_error& error) {
+        error.restore();
+        return nullptr;
+    } catch (const std::exception& error) {
+        return raise_error(error);
+    }
+}
+
+PyObject* call_imported_counter_value(PyObject*, PyObject* args) {
+    try {
+        PyObject* callable = nullptr;
+        PyObject* receiver = nullptr;
+        if (PyArg_ParseTuple(args, "OO", &callable, &receiver) == 0) {
+            return nullptr;
+        }
+
+        py_context_t ctx(callable, portal::py_backend::ref_policy::borrowed);
+        auto counter = portal::bind_receiver<portal::counter>(
+            ctx, receiver, portal::py_backend::ref_policy::borrowed);
+        return portal::py_backend::converter<int>::to(ctx, counter.value());
+    } catch (const portal::py_backend::python_error& error) {
+        error.restore();
+        return nullptr;
+    } catch (const std::exception& error) {
+        return raise_error(error);
+    }
+}
+
+PyObject* construct_imported_counter_add(PyObject*, PyObject* args) {
+    try {
+        PyObject* callable = nullptr;
+        unsigned handle = 0;
+        int value = 0;
+        if (PyArg_ParseTuple(args, "OIi", &callable, &handle, &value) == 0) {
+            return nullptr;
+        }
+
+        py_context_t ctx(callable, portal::py_backend::ref_policy::borrowed);
+        auto counter = portal::construct<portal::counter>(ctx, handle);
+        return portal::py_backend::converter<int>::to(ctx, counter.add(value));
+    } catch (const portal::py_backend::python_error& error) {
+        error.restore();
+        return nullptr;
+    } catch (const std::exception& error) {
+        return raise_error(error);
+    }
+}
+
+PyMethodDef module_methods[] = {
+    {"callImportedCalc", call_imported_calc, METH_VARARGS, nullptr},
+    {"callImportedFoo", call_imported_foo, METH_VARARGS, nullptr},
+    {"callImportedEcho", call_imported_echo, METH_VARARGS, nullptr},
+    {"callImportedCounterAdd", call_imported_counter_add, METH_VARARGS, nullptr},
+    {"callImportedCounterValue", call_imported_counter_value, METH_VARARGS, nullptr},
+    {"constructImportedCounterAdd", construct_imported_counter_add, METH_VARARGS, nullptr},
+    {nullptr, nullptr, 0, nullptr}};
+
+PyModuleDef module_def = {PyModuleDef_HEAD_INIT, "portal_python_runtime_addon", nullptr, -1,
+                          module_methods};
+} // namespace
 
 PyMODINIT_FUNC PyInit_portal_python_runtime_addon() {
     PyObject* module_object = PyModule_Create(&module_def);
@@ -269,23 +225,20 @@ PyMODINIT_FUNC PyInit_portal_python_runtime_addon() {
 
     try {
         static py_export_context_t ctx;
-        portal::py_backend::module_t module(
-            module_object,
-            portal::py_backend::ref_policy::borrowed);
+        portal::py_backend::module_t module(module_object,
+                                            portal::py_backend::ref_policy::borrowed);
 
         portal::export_free_callable(ctx, module, "add", add_function);
         portal::export_calc(ctx, module, add_function);
         portal::export_free_callable(ctx, module, "store", store_function);
         portal::export_free_callable(ctx, module, "stored", stored_function);
-        portal::export_free_callable(ctx, module, "ownedCounterConstructed", owned_counter_constructed);
+        portal::export_free_callable(ctx, module, "ownedCounterConstructed",
+                                     owned_counter_constructed);
         portal::export_free_callable(ctx, module, "ownedCounterDestroyed", owned_counter_destroyed);
-        portal::export_free_callable<int(int, unsigned)>(
-            ctx,
-            module,
-            "multiply",
-            [](int a, unsigned b) {
-                return a * static_cast<int>(b);
-            });
+        portal::export_free_callable<int(int, unsigned)>(ctx, module, "multiply",
+                                                         [](int a, unsigned b) {
+                                                             return a * static_cast<int>(b);
+                                                         });
         portal::export_calc(ctx, module)
             .bind<int(int)>(scale_by_ten_function)
             .bind<int(int, unsigned)>(multiply_function{})

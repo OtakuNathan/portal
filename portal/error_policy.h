@@ -12,7 +12,11 @@
 #define PORTAL_HAS_EXCEPTIONS 0
 // Legacy must-succeed APIs are contracts. Untrusted input must use the checked
 // codec / optional conversion APIs. The error expression is not evaluated.
-#define PORTAL_RAISE(error) do { assert(false && #error); std::abort(); } while(false)
+#define PORTAL_RAISE(error)                                                                        \
+    do {                                                                                           \
+        assert(false && #error);                                                                   \
+        std::abort();                                                                              \
+    } while (false)
 #endif
 #define PORTAL_NOEXCEPT_IF_DISABLED noexcept(!PORTAL_HAS_EXCEPTIONS)
 #endif

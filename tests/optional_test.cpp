@@ -3,51 +3,43 @@
 #include "portal/optional.h"
 
 namespace {
-    struct tracked_value {
-        static int alive;
+struct tracked_value {
+    static int alive;
 
-        int value = 0;
+    int value = 0;
 
-        explicit tracked_value(int n)
-            : value(n) {
-            ++alive;
-        }
+    explicit tracked_value(int n) : value(n) {
+        ++alive;
+    }
 
-        tracked_value(const tracked_value& other)
-            : value(other.value) {
-            ++alive;
-        }
+    tracked_value(const tracked_value& other) : value(other.value) {
+        ++alive;
+    }
 
-        tracked_value(tracked_value&& other) noexcept
-            : value(other.value) {
-            other.value = -1;
-            ++alive;
-        }
+    tracked_value(tracked_value&& other) noexcept : value(other.value) {
+        other.value = -1;
+        ++alive;
+    }
 
-        ~tracked_value() noexcept {
-            --alive;
-        }
-    };
+    ~tracked_value() noexcept {
+        --alive;
+    }
+};
 
-    int tracked_value::alive = 0;
-}
+int tracked_value::alive = 0;
+} // namespace
 
 int main() {
-    static_assert(
-        std::is_trivially_destructible<portal::optional<int>>::value,
-        "optional<int> should preserve trivial destruction");
-    static_assert(
-        std::is_trivially_copy_constructible<portal::optional<int>>::value,
-        "optional<int> should preserve trivial copy construction");
-    static_assert(
-        std::is_trivially_move_constructible<portal::optional<int>>::value,
-        "optional<int> should preserve trivial move construction");
-    static_assert(
-        std::is_trivially_copy_assignable<portal::optional<int>>::value,
-        "optional<int> should preserve trivial copy assignment");
-    static_assert(
-        std::is_trivially_move_assignable<portal::optional<int>>::value,
-        "optional<int> should preserve trivial move assignment");
+    static_assert(std::is_trivially_destructible<portal::optional<int>>::value,
+                  "optional<int> should preserve trivial destruction");
+    static_assert(std::is_trivially_copy_constructible<portal::optional<int>>::value,
+                  "optional<int> should preserve trivial copy construction");
+    static_assert(std::is_trivially_move_constructible<portal::optional<int>>::value,
+                  "optional<int> should preserve trivial move construction");
+    static_assert(std::is_trivially_copy_assignable<portal::optional<int>>::value,
+                  "optional<int> should preserve trivial copy assignment");
+    static_assert(std::is_trivially_move_assignable<portal::optional<int>>::value,
+                  "optional<int> should preserve trivial move assignment");
 
     portal::optional<int> empty;
     if (empty) {

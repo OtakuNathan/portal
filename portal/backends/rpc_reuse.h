@@ -3,7 +3,8 @@
 
 #include "rpc.h"
 
-namespace portal { namespace rpc {
+namespace portal {
+namespace rpc {
 
 // This cache is worker-confined, not a shared request queue. Each scope owns its
 // active buffers; recursive calls use separate storage. max_retained_bytes is a
@@ -17,6 +18,7 @@ class call_workspace {
         if (buffer.capacity() <= max_retained_bytes_ && buffer.capacity() > cache.capacity())
             buffer.swap(cache);
     }
+
 public:
     explicit call_workspace(std::size_t max_retained_bytes = 64 * 1024) noexcept
         : max_retained_bytes_(max_retained_bytes) {}
@@ -25,6 +27,7 @@ public:
 
     class scope {
         call_workspace& owner_;
+
     public:
         bytes request, response;
         explicit scope(call_workspace& owner) noexcept : owner_(owner) {
@@ -39,8 +42,12 @@ public:
         }
     };
 
-    std::size_t cached_request_capacity() const noexcept { return request_cache_.capacity(); }
-    std::size_t cached_response_capacity() const noexcept { return response_cache_.capacity(); }
+    std::size_t cached_request_capacity() const noexcept {
+        return request_cache_.capacity();
+    }
+    std::size_t cached_response_capacity() const noexcept {
+        return response_cache_.capacity();
+    }
     void release_cached_storage() noexcept {
         bytes().swap(request_cache_);
         bytes().swap(response_cache_);
@@ -50,9 +57,9 @@ public:
 // Transport must synchronously finish reading request and fill response before
 // returning. Neither reference may escape round_trip_into(). Use an owning
 // per-operation buffer for asynchronous transports instead.
-template<class Transport, class... Values>
-value round_trip_reusing(Transport& transport, call_workspace& workspace,
-                         std::uint64_t method, const Values&... args) {
+template <class Transport, class... Values>
+value round_trip_reusing(Transport& transport, call_workspace& workspace, std::uint64_t method,
+                         const Values&... args) {
     call_workspace::scope buffers(workspace);
     detail::encode_request_values_into(buffers.request, method, args...);
     transport.round_trip_into(buffers.request, buffers.response);
@@ -66,6 +73,7 @@ value round_trip_reusing(Transport& transport, call_workspace& workspace,
 class reusing_loopback_transport {
     router& router_;
     dispatch_workspace workspace_;
+
 public:
     explicit reusing_loopback_transport(router& server, std::size_t retained_args = 64) noexcept
         : router_(server), workspace_(retained_args) {}
@@ -74,5 +82,6 @@ public:
     }
 };
 
-}} // namespace portal::rpc
+} // namespace rpc
+} // namespace portal
 #endif

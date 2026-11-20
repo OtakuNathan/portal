@@ -8,251 +8,242 @@
 #include <type_traits>
 
 namespace portal {
-    namespace native {
-        class counter {
-        public:
-            explicit counter(unsigned initial_handle)
-                : handle(static_cast<int>(initial_handle)) {
-            }
+namespace native {
+class counter {
+public:
+    explicit counter(unsigned initial_handle) : handle(static_cast<int>(initial_handle)) {}
 
-            int add(int value) const noexcept {
-                return handle + value;
-            }
-
-            int value() const noexcept {
-                return handle;
-            }
-
-        private:
-            int handle = 0;
-        };
-
-        class consumer {
-        public:
-            template <typename Callback>
-            consumer(counter& source, Callback& callback)
-                : base_(portal::call_callback(callback, source.value())) {
-            }
-
-            int combine(counter& source, int value) const {
-                return base_ + source.value() + value;
-            }
-
-            template <typename Callback>
-            int apply(Callback& callback, int value) const {
-                return base_ + portal::call_callback(callback, value);
-            }
-
-        private:
-            int base_ = 0;
-        };
+    int add(int value) const noexcept {
+        return handle + value;
     }
-}
+
+    int value() const noexcept {
+        return handle;
+    }
+
+private:
+    int handle = 0;
+};
+
+class consumer {
+public:
+    template <typename Callback>
+    consumer(counter& source, Callback& callback)
+        : base_(portal::call_callback(callback, source.value())) {}
+
+    int combine(counter& source, int value) const {
+        return base_ + source.value() + value;
+    }
+
+    template <typename Callback>
+    int apply(Callback& callback, int value) const {
+        return base_ + portal::call_callback(callback, value);
+    }
+
+private:
+    int base_ = 0;
+};
+} // namespace native
+} // namespace portal
 
 namespace {
-    using napi_context_t = portal::napi_backend::context_t;
-    using napi_export_context_t = portal::napi_backend::export_context_t;
+using napi_context_t = portal::napi_backend::context_t;
+using napi_export_context_t = portal::napi_backend::export_context_t;
 
-    struct record_state {
-        int argc = 0;
-        int first = 0;
-        int second = 0;
-    };
+struct record_state {
+    int argc = 0;
+    int first = 0;
+    int second = 0;
+};
 
-    int stored_value = 0;
+int stored_value = 0;
 
-    struct noarg_receiver {
-        using native_t = noarg_receiver;
-        int value = 37;
-    };
+struct noarg_receiver {
+    using native_t = noarg_receiver;
+    int value = 37;
+};
 
-    int add_function(int a, unsigned b) {
-        return a + static_cast<int>(b);
-    }
-
-    int scale_by_ten_function(int value) {
-        return value * 10;
-    }
-
-    void store_function(int value) {
-        stored_value = value;
-    }
-
-    struct multiply_function {
-        int operator()(int a, unsigned b) const {
-            return a * static_cast<int>(b);
-        }
-    };
-
-    struct transform_function {
-        int operator()(int value) const { return value * 10; }
-        int operator()(int value, unsigned extra) const {
-            return value + static_cast<int>(extra);
-        }
-    };
-
-    int value_to_int(napi_env env, napi_value value) {
-        int result = 0;
-        napi_get_value_int32(env, value, &result);
-        return result;
-    }
-
-    napi_value int_value(napi_env env, int value) {
-        napi_value result = nullptr;
-        napi_create_int32(env, value, &result);
-        return result;
-    }
-
-    napi_value string_value(napi_env env, const std::string& value) {
-        napi_value result = nullptr;
-        napi_create_string_utf8(env, value.data(), value.size(), &result);
-        return result;
-    }
-
-    std::string value_to_string(napi_env env, napi_value value) {
-        std::size_t size = 0;
-        if (napi_get_value_string_utf8(env, value, nullptr, 0, &size) != napi_ok) {
-            return std::string();
-        }
-        std::string text(size + 1, '\0');
-        std::size_t copied = 0;
-        napi_get_value_string_utf8(env, value, &text[0], text.size(), &copied);
-        text.resize(copied);
-        return text;
-    }
-
-    napi_value get_property(napi_env env, napi_value object, const char* name) {
-        napi_value result = nullptr;
-        napi_get_named_property(env, object, name, &result);
-        return result;
-    }
-
-    void set_property(napi_env env, napi_value object, const char* name, napi_value value) {
-        napi_set_named_property(env, object, name, value);
-    }
-
-    template <typename Symbol>
-    const char* symbol_name() noexcept {
-        return portal::import_symbol_traits<Symbol>::symbol_name();
-    }
-
-    int object_handle(napi_env env, napi_value object) {
-        return value_to_int(env, get_property(env, object, "handle"));
-    }
-
-    napi_value record_callback(napi_env env, napi_callback_info info) {
-        void* data = nullptr;
-        std::size_t argc = 2;
-        napi_value argv[2] = {};
-        napi_get_cb_info(env, info, &argc, argv, nullptr, &data);
-
-        record_state* state = static_cast<record_state*>(data);
-        state->argc = static_cast<int>(argc);
-        state->first = argc > 0 ? value_to_int(env, argv[0]) : 0;
-        state->second = argc > 1 ? value_to_int(env, argv[1]) : 0;
-
-        napi_value undefined = nullptr;
-        napi_get_undefined(env, &undefined);
-        return undefined;
-    }
-
-    napi_value calc_callback(napi_env env, napi_callback_info info) {
-        std::size_t argc = 2;
-        napi_value argv[2] = {};
-        napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-        return int_value(env, value_to_int(env, argv[0]) + value_to_int(env, argv[1]));
-    }
-
-    napi_value echo_callback(napi_env env, napi_callback_info info) {
-        std::size_t argc = 1;
-        napi_value argv[1] = {};
-        napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-        const std::string decorated = "[" + value_to_string(env, argv[0]) + "]";
-        return string_value(env, decorated);
-    }
-
-    napi_value callback_value(napi_env env, napi_callback_info info) {
-        std::size_t argc = 1;
-        napi_value argv[1] = {};
-        napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-        return int_value(env, value_to_int(env, argv[0]) * 3);
-    }
-
-    napi_value pass_counter_callback(napi_env env, napi_callback_info info) {
-        std::size_t argc = 2;
-        napi_value argv[2] = {};
-        napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-        return int_value(env, object_handle(env, argv[0]) + value_to_int(env, argv[1]));
-    }
-
-    napi_value pass_transform_callback(napi_env env, napi_callback_info info) {
-        std::size_t argc = 2;
-        napi_value argv[2] = {};
-        napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-        napi_value result = nullptr;
-        napi_call_function(env, nullptr, argv[0], 1, &argv[1], &result);
-        return result;
-    }
-
-    napi_value counter_callback(napi_env env, napi_callback_info info) {
-        std::size_t argc = 2;
-        napi_value argv[2] = {};
-        napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-
-        napi_valuetype first_type = napi_undefined;
-        napi_typeof(env, argv[0], &first_type);
-        if (argc == 1 && first_type == napi_number) {
-            napi_value object = nullptr;
-            napi_create_object(env, &object);
-            set_property(env, object, "handle", argv[0]);
-            return object;
-        }
-
-        const int handle = object_handle(env, argv[0]);
-        if (argc == 1) {
-            return int_value(env, handle);
-        }
-        return int_value(env, handle + value_to_int(env, argv[1]));
-    }
-
-    napi_value call0(napi_env env, napi_value function, napi_value receiver = nullptr) {
-        napi_value result = nullptr;
-        napi_call_function(env, receiver, function, 0, nullptr, &result);
-        return result;
-    }
-
-    napi_value call1(napi_env env, napi_value function, napi_value a, napi_value receiver = nullptr) {
-        napi_value argv[] = {a};
-        napi_value result = nullptr;
-        napi_call_function(env, receiver, function, 1, argv, &result);
-        return result;
-    }
-
-    napi_value call2(
-        napi_env env,
-        napi_value function,
-        napi_value a,
-        napi_value b,
-        napi_value receiver = nullptr)
-    {
-        napi_value argv[] = {a, b};
-        napi_value result = nullptr;
-        napi_call_function(env, receiver, function, 2, argv, &result);
-        return result;
-    }
+int add_function(int a, unsigned b) {
+    return a + static_cast<int>(b);
 }
 
-static_assert(
-    !std::is_same<
-        portal::import_symbols::counter::add,
-        portal::interface_descriptors::counter_addable<portal::import_t>
-            ::method_symbols_t::add>::value,
-    "a concrete interface projection should bind its own receiver symbol");
+int scale_by_ten_function(int value) {
+    return value * 10;
+}
+
+void store_function(int value) {
+    stored_value = value;
+}
+
+struct multiply_function {
+    int operator()(int a, unsigned b) const {
+        return a * static_cast<int>(b);
+    }
+};
+
+struct transform_function {
+    int operator()(int value) const {
+        return value * 10;
+    }
+    int operator()(int value, unsigned extra) const {
+        return value + static_cast<int>(extra);
+    }
+};
+
+int value_to_int(napi_env env, napi_value value) {
+    int result = 0;
+    napi_get_value_int32(env, value, &result);
+    return result;
+}
+
+napi_value int_value(napi_env env, int value) {
+    napi_value result = nullptr;
+    napi_create_int32(env, value, &result);
+    return result;
+}
+
+napi_value string_value(napi_env env, const std::string& value) {
+    napi_value result = nullptr;
+    napi_create_string_utf8(env, value.data(), value.size(), &result);
+    return result;
+}
+
+std::string value_to_string(napi_env env, napi_value value) {
+    std::size_t size = 0;
+    if (napi_get_value_string_utf8(env, value, nullptr, 0, &size) != napi_ok) {
+        return std::string();
+    }
+    std::string text(size + 1, '\0');
+    std::size_t copied = 0;
+    napi_get_value_string_utf8(env, value, &text[0], text.size(), &copied);
+    text.resize(copied);
+    return text;
+}
+
+napi_value get_property(napi_env env, napi_value object, const char* name) {
+    napi_value result = nullptr;
+    napi_get_named_property(env, object, name, &result);
+    return result;
+}
+
+void set_property(napi_env env, napi_value object, const char* name, napi_value value) {
+    napi_set_named_property(env, object, name, value);
+}
+
+template <typename Symbol>
+const char* symbol_name() noexcept {
+    return portal::import_symbol_traits<Symbol>::symbol_name();
+}
+
+int object_handle(napi_env env, napi_value object) {
+    return value_to_int(env, get_property(env, object, "handle"));
+}
+
+napi_value record_callback(napi_env env, napi_callback_info info) {
+    void* data = nullptr;
+    std::size_t argc = 2;
+    napi_value argv[2] = {};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, &data);
+
+    record_state* state = static_cast<record_state*>(data);
+    state->argc = static_cast<int>(argc);
+    state->first = argc > 0 ? value_to_int(env, argv[0]) : 0;
+    state->second = argc > 1 ? value_to_int(env, argv[1]) : 0;
+
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+}
+
+napi_value calc_callback(napi_env env, napi_callback_info info) {
+    std::size_t argc = 2;
+    napi_value argv[2] = {};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    return int_value(env, value_to_int(env, argv[0]) + value_to_int(env, argv[1]));
+}
+
+napi_value echo_callback(napi_env env, napi_callback_info info) {
+    std::size_t argc = 1;
+    napi_value argv[1] = {};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    const std::string decorated = "[" + value_to_string(env, argv[0]) + "]";
+    return string_value(env, decorated);
+}
+
+napi_value callback_value(napi_env env, napi_callback_info info) {
+    std::size_t argc = 1;
+    napi_value argv[1] = {};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    return int_value(env, value_to_int(env, argv[0]) * 3);
+}
+
+napi_value pass_counter_callback(napi_env env, napi_callback_info info) {
+    std::size_t argc = 2;
+    napi_value argv[2] = {};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    return int_value(env, object_handle(env, argv[0]) + value_to_int(env, argv[1]));
+}
+
+napi_value pass_transform_callback(napi_env env, napi_callback_info info) {
+    std::size_t argc = 2;
+    napi_value argv[2] = {};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    napi_value result = nullptr;
+    napi_call_function(env, nullptr, argv[0], 1, &argv[1], &result);
+    return result;
+}
+
+napi_value counter_callback(napi_env env, napi_callback_info info) {
+    std::size_t argc = 2;
+    napi_value argv[2] = {};
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+    napi_valuetype first_type = napi_undefined;
+    napi_typeof(env, argv[0], &first_type);
+    if (argc == 1 && first_type == napi_number) {
+        napi_value object = nullptr;
+        napi_create_object(env, &object);
+        set_property(env, object, "handle", argv[0]);
+        return object;
+    }
+
+    const int handle = object_handle(env, argv[0]);
+    if (argc == 1) {
+        return int_value(env, handle);
+    }
+    return int_value(env, handle + value_to_int(env, argv[1]));
+}
+
+napi_value call0(napi_env env, napi_value function, napi_value receiver = nullptr) {
+    napi_value result = nullptr;
+    napi_call_function(env, receiver, function, 0, nullptr, &result);
+    return result;
+}
+
+napi_value call1(napi_env env, napi_value function, napi_value a, napi_value receiver = nullptr) {
+    napi_value argv[] = {a};
+    napi_value result = nullptr;
+    napi_call_function(env, receiver, function, 1, argv, &result);
+    return result;
+}
+
+napi_value call2(napi_env env, napi_value function, napi_value a, napi_value b,
+                 napi_value receiver = nullptr) {
+    napi_value argv[] = {a, b};
+    napi_value result = nullptr;
+    napi_call_function(env, receiver, function, 2, argv, &result);
+    return result;
+}
+} // namespace
+
+static_assert(!std::is_same<portal::import_symbols::counter::add,
+                            portal::interface_descriptors::counter_addable<
+                                portal::import_t>::method_symbols_t::add>::value,
+              "a concrete interface projection should bind its own receiver symbol");
 
 static_assert(
     std::is_same<
-        portal::import_symbol_traits<
-            portal::import_symbols::counter::add>::receiver_symbol_t,
+        portal::import_symbol_traits<portal::import_symbols::counter::add>::receiver_symbol_t,
         portal::import_symbols::counter>::value,
     "implemented interface methods should regain the concrete receiver identity");
 
@@ -263,20 +254,27 @@ int run_cleanup_lifetime_test() {
     bool native_destroyed = false;
     struct tracked_context : napi_export_context_t {
         bool& alive;
-        tracked_context(napi_env env, bool& alive_)
-            : napi_export_context_t(env), alive(alive_) {}
-        ~tracked_context() { alive = false; }
+        tracked_context(napi_env env, bool& alive_) : napi_export_context_t(env), alive(alive_) {}
+        ~tracked_context() {
+            alive = false;
+        }
     };
     struct tracked_native {
         bool& context_alive;
         bool& destroyed;
-        ~tracked_native() { destroyed = !context_alive; }
+        ~tracked_native() {
+            destroyed = !context_alive;
+        }
     };
 
     napi_env env = napi_stub_create_env();
     auto* ctx = new tracked_context(env, context_alive);
     napi_add_env_cleanup_hook(
-        env, [](void* data) { delete static_cast<tracked_context*>(data); }, ctx);
+        env,
+        [](void* data) {
+            delete static_cast<tracked_context*>(data);
+        },
+        ctx);
     napi_value instance = nullptr;
     napi_create_object(env, &instance);
     {
@@ -299,17 +297,20 @@ int run_test(napi_env env) {
             napi_ref old_ref = first.constructor_ref;
             moved_ref = second.constructor_ref;
             first = std::move(second);
-            if (old_ref->value != nullptr || moved_ref->value != constructor) return 70;
+            if (old_ref->value != nullptr || moved_ref->value != constructor)
+                return 70;
             target_t moved(std::move(first));
-            if (moved.constructor_ref != moved_ref || env->cleanup_hooks.size() != 1) return 71;
+            if (moved.constructor_ref != moved_ref || env->cleanup_hooks.size() != 1)
+                return 71;
         }
-        if (moved_ref->value != nullptr || !env->cleanup_hooks.empty()) return 72;
+        if (moved_ref->value != nullptr || !env->cleanup_hooks.empty())
+            return 72;
 
         // Static module contexts may be destroyed after the env. The cleanup
         // hook must make their later reference destruction harmless.
         napi_env temporary_env = napi_stub_create_env();
-        auto temporary_constructor = napi_stub_make_value(
-            temporary_env, napi_value__::kind_t::function);
+        auto temporary_constructor =
+            napi_stub_make_value(temporary_env, napi_value__::kind_t::function);
         target_t late_target(temporary_env, temporary_constructor, nullptr);
         napi_stub_delete_env(temporary_env);
     }
@@ -323,40 +324,39 @@ int run_test(napi_env env) {
     set_property(env, import_module_value, symbol_name<portal::import_symbols::bar>(), record);
     portal::napi_backend::module_t import_module{env, import_module_value};
 
-    auto record_ctx = portal::import_from<portal::import_symbols::foo, napi_context_t>(
-        import_module);
+    auto record_ctx =
+        portal::import_from<portal::import_symbols::foo, napi_context_t>(import_module);
     portal::call_foo(record_ctx, 1, 2);
     if (state.argc != 2 || state.first != 1 || state.second != 2) {
         return 1;
     }
 
-    auto bar_ctx = portal::import_from<portal::import_symbols::bar, napi_context_t>(
-        import_module);
+    auto bar_ctx = portal::import_from<portal::import_symbols::bar, napi_context_t>(import_module);
     portal::bar(bar_ctx)(7);
     if (state.argc != 1 || state.first != 7) {
         return 2;
     }
 
     napi_value calc = nullptr;
-    napi_create_function(env, symbol_name<portal::import_symbols::calc>(),
-        NAPI_AUTO_LENGTH, calc_callback, nullptr, &calc);
+    napi_create_function(env, symbol_name<portal::import_symbols::calc>(), NAPI_AUTO_LENGTH,
+                         calc_callback, nullptr, &calc);
     set_property(env, import_module_value, symbol_name<portal::import_symbols::calc>(), calc);
-    auto calc_ctx = portal::import_from<portal::import_symbols::calc, napi_context_t>(
-        import_module);
+    auto calc_ctx =
+        portal::import_from<portal::import_symbols::calc, napi_context_t>(import_module);
     if (portal::call_calc(calc_ctx, 3, 4u) != 7) {
         return 3;
     }
 
     napi_value echo = nullptr;
-    napi_create_function(env, symbol_name<portal::import_symbols::echo>(),
-        NAPI_AUTO_LENGTH, echo_callback, nullptr, &echo);
+    napi_create_function(env, symbol_name<portal::import_symbols::echo>(), NAPI_AUTO_LENGTH,
+                         echo_callback, nullptr, &echo);
     set_property(env, import_module_value, symbol_name<portal::import_symbols::echo>(), echo);
-    auto echo_ctx = portal::import_from<portal::import_symbols::echo, napi_context_t>(
-        import_module);
+    auto echo_ctx =
+        portal::import_from<portal::import_symbols::echo, napi_context_t>(import_module);
     const std::string utf8_text = "h\xC3\xA9llo \xE4\xB8\xAD";
     const std::string embedded_text(std::string("a\0b", 3) + utf8_text);
-    if (portal::call_echo(echo_ctx, utf8_text) != "[" + utf8_text + "]"
-            || portal::call_echo(echo_ctx, embedded_text) != "[" + embedded_text + "]") {
+    if (portal::call_echo(echo_ctx, utf8_text) != "[" + utf8_text + "]" ||
+        portal::call_echo(echo_ctx, embedded_text) != "[" + embedded_text + "]") {
         return 60;
     }
 
@@ -365,15 +365,14 @@ int run_test(napi_env env) {
     set_property(env, receiver, "handle", int_value(env, 13));
 
     napi_value counter_call = nullptr;
-    napi_create_function(env, "counter_call", NAPI_AUTO_LENGTH, counter_callback, nullptr, &counter_call);
-    set_property(env, import_module_value, symbol_name<portal::import_symbols::counter>(), counter_call);
+    napi_create_function(env, "counter_call", NAPI_AUTO_LENGTH, counter_callback, nullptr,
+                         &counter_call);
+    set_property(env, import_module_value, symbol_name<portal::import_symbols::counter>(),
+                 counter_call);
     portal::napi_backend::object_t<void> import_source(env, import_module_value);
-    auto counter_ctx = portal::import_from<portal::import_symbols::counter, napi_context_t>(
-        import_source);
-    auto counter = portal::bind_receiver<portal::counter>(
-        counter_ctx,
-        env,
-        receiver);
+    auto counter_ctx =
+        portal::import_from<portal::import_symbols::counter, napi_context_t>(import_source);
+    auto counter = portal::bind_receiver<portal::counter>(counter_ctx, env, receiver);
     if (counter.add(29) != 42 || counter.value() != 13) {
         return 4;
     }
@@ -386,38 +385,35 @@ int run_test(napi_env env) {
     napi_value callback = nullptr;
     napi_value pass_counter = nullptr;
     napi_value pass_transform = nullptr;
-    napi_create_function(env, "callback", NAPI_AUTO_LENGTH,
-        callback_value, nullptr, &callback);
-    napi_create_function(env, "pass_counter", NAPI_AUTO_LENGTH,
-        pass_counter_callback, nullptr, &pass_counter);
-    napi_create_function(env, "pass_transform", NAPI_AUTO_LENGTH,
-        pass_transform_callback, nullptr, &pass_transform);
-    set_property(env, import_module_value,
-        symbol_name<portal::import_symbols::callback>(), callback);
-    set_property(env, import_module_value,
-        symbol_name<portal::import_symbols::pass_counter>(), pass_counter);
-    set_property(env, import_module_value,
-        symbol_name<portal::import_symbols::pass_transform>(), pass_transform);
+    napi_create_function(env, "callback", NAPI_AUTO_LENGTH, callback_value, nullptr, &callback);
+    napi_create_function(env, "pass_counter", NAPI_AUTO_LENGTH, pass_counter_callback, nullptr,
+                         &pass_counter);
+    napi_create_function(env, "pass_transform", NAPI_AUTO_LENGTH, pass_transform_callback, nullptr,
+                         &pass_transform);
+    set_property(env, import_module_value, symbol_name<portal::import_symbols::callback>(),
+                 callback);
+    set_property(env, import_module_value, symbol_name<portal::import_symbols::pass_counter>(),
+                 pass_counter);
+    set_property(env, import_module_value, symbol_name<portal::import_symbols::pass_transform>(),
+                 pass_transform);
 
-    auto pass_counter_ctx = portal::import_from<
-        portal::import_symbols::pass_counter, napi_context_t>(import_module);
+    auto pass_counter_ctx =
+        portal::import_from<portal::import_symbols::pass_counter, napi_context_t>(import_module);
     if (portal::call_pass_counter(pass_counter_ctx, counter, 29) != 42) {
         return 31;
     }
-    auto pass_transform_ctx = portal::import_from<
-        portal::import_symbols::pass_transform, napi_context_t>(import_module);
-    if (portal::call_pass_transform(
-            pass_transform_ctx, transform_function{}, 4) != 40) {
+    auto pass_transform_ctx =
+        portal::import_from<portal::import_symbols::pass_transform, napi_context_t>(import_module);
+    if (portal::call_pass_transform(pass_transform_ctx, transform_function{}, 4) != 40) {
         return 32;
     }
     auto built_transform = portal::bind_transform()
-        .bind<int(int)>(scale_by_ten_function)
-        .bind<int(int, unsigned)>([](int value, unsigned extra) {
-            return value * static_cast<int>(extra);
-        })
-        .build();
-    if (portal::call_pass_transform(
-            pass_transform_ctx, std::move(built_transform), 6) != 60) {
+                               .bind<int(int)>(scale_by_ten_function)
+                               .bind<int(int, unsigned)>([](int value, unsigned extra) {
+                                   return value * static_cast<int>(extra);
+                               })
+                               .build();
+    if (portal::call_pass_transform(pass_transform_ctx, std::move(built_transform), 6) != 60) {
         return 33;
     }
 
@@ -428,19 +424,21 @@ int run_test(napi_env env) {
 
     {
         using backend = portal::napi_backend;
-        auto target = backend::define_class_impl<noarg_receiver>(
-            export_ctx, module, "noarg");
+        auto target = backend::define_class_impl<noarg_receiver>(export_ctx, module, "noarg");
         backend::define_constructor_impl<noarg_receiver, void()>(export_ctx, target);
         export_ctx.store_export_class<noarg_receiver>(std::move(target));
         napi_value noarg = get_property(env, module_value, "noarg");
         napi_value instance = nullptr;
         napi_new_instance(env, noarg, 0, nullptr, &instance);
         void* native = nullptr;
-        if (napi_unwrap(env, instance, &native) != napi_ok
-                || static_cast<noarg_receiver*>(native)->value != 37) return 79;
+        if (napi_unwrap(env, instance, &native) != napi_ok ||
+            static_cast<noarg_receiver*>(native)->value != 37)
+            return 79;
         auto exported = backend::make_export_object_impl<noarg_receiver>(export_ctx);
-        if (exported.native(export_ctx)->value != 37) return 80;
-        if (call1(env, noarg, int_value(env, 1)) != nullptr) return 81;
+        if (exported.native(export_ctx)->value != 37)
+            return 80;
+        if (call1(env, noarg, int_value(env, 1)) != nullptr)
+            return 81;
     }
 
     napi_value bad_int = nullptr;
@@ -460,8 +458,8 @@ int run_test(napi_env env) {
         return 61;
     }
     const std::string embedded_probe(std::string("a\0b", 3));
-    auto maybe_embedded = portal::from_optional<std::string>(
-        export_ctx, string_value(env, embedded_probe));
+    auto maybe_embedded =
+        portal::from_optional<std::string>(export_ctx, string_value(env, embedded_probe));
     if (!maybe_embedded || maybe_embedded.value() != embedded_probe) {
         return 62;
     }
@@ -488,10 +486,12 @@ int run_test(napi_env env) {
             caught_failure = true;
         }
         env->string_read_failure_at = 0;
-        if (!caught_failure) return 75;
+        if (!caught_failure)
+            return 75;
     }
     const auto recovered_string = portal::from_optional<std::string>(export_ctx, string_probe);
-    if (!recovered_string || *recovered_string != embedded_probe) return 76;
+    if (!recovered_string || *recovered_string != embedded_probe)
+        return 76;
 
     bool caught_bad_conversion = false;
     try {
@@ -506,18 +506,17 @@ int run_test(napi_env env) {
     portal::export_free_callable(export_ctx, module, "add", add_function);
     portal::export_calc(export_ctx, module, add_function);
     portal::export_free_callable(export_ctx, module, "store", store_function);
-    portal::export_calc<int(int, unsigned)>(
-        export_ctx,
-        module,
-        [](int a, unsigned b) {
-            return a * static_cast<int>(b);
-        });
+    portal::export_calc<int(int, unsigned)>(export_ctx, module, [](int a, unsigned b) {
+        return a * static_cast<int>(b);
+    });
     portal::export_calc(export_ctx, module)
         .bind<int(int)>(scale_by_ten_function)
         .bind<int(int, unsigned)>(multiply_function{})
         .commit();
-    if (value_to_int(env, call1(env, get_property(env, module_value, "calc"), int_value(env, 6))) != 60
-            || value_to_int(env, call2(env, get_property(env, module_value, "calc"), int_value(env, 6), int_value(env, 7))) != 42) {
+    if (value_to_int(env, call1(env, get_property(env, module_value, "calc"), int_value(env, 6))) !=
+            60 ||
+        value_to_int(env, call2(env, get_property(env, module_value, "calc"), int_value(env, 6),
+                                int_value(env, 7))) != 42) {
         return 30;
     }
 
@@ -539,22 +538,24 @@ int run_test(napi_env env) {
         })
         .commit();
     napi_value echo_export = get_property(env, module_value, "echo");
-    if (value_to_string(env, call1(env, echo_export, string_value(env, utf8_text)))
-            != "<" + utf8_text + ">"
-            || value_to_string(env, call1(env, echo_export, string_value(env, embedded_text)))
-            != "<" + embedded_text + ">"
-            || value_to_int(env, call1(env, echo_export, int_value(env, 21))) != 42) {
+    if (value_to_string(env, call1(env, echo_export, string_value(env, utf8_text))) !=
+            "<" + utf8_text + ">" ||
+        value_to_string(env, call1(env, echo_export, string_value(env, embedded_text))) !=
+            "<" + embedded_text + ">" ||
+        value_to_int(env, call1(env, echo_export, int_value(env, 21))) != 42) {
         return 63;
     }
     if (call1(env, echo_export, bad_int) != nullptr) {
         return 64;
     }
 
-    auto exported_calc_ctx = portal::import_from<portal::import_symbols::calc, napi_context_t>(
-        module);
-    if (value_to_int(env, call2(env, get_property(env, module_value, "add"), int_value(env, 12), int_value(env, 13))) != 25
-            || value_to_int(env, call1(env, get_property(env, module_value, "calc"), int_value(env, 6))) != 66
-            || portal::call_calc(exported_calc_ctx, 6, 7u) != 43) {
+    auto exported_calc_ctx =
+        portal::import_from<portal::import_symbols::calc, napi_context_t>(module);
+    if (value_to_int(env, call2(env, get_property(env, module_value, "add"), int_value(env, 12),
+                                int_value(env, 13))) != 25 ||
+        value_to_int(env, call1(env, get_property(env, module_value, "calc"), int_value(env, 6))) !=
+            66 ||
+        portal::call_calc(exported_calc_ctx, 6, 7u) != 43) {
         return 9;
     }
     if (call2(env, get_property(env, module_value, "add"), bad_int, int_value(env, 1)) != nullptr) {
@@ -569,14 +570,14 @@ int run_test(napi_env env) {
 
     portal::exports::counter::register_all(export_ctx, module);
 
-    auto counter_class_ctx = portal::import_from<portal::import_symbols::counter, napi_context_t>(
-        module);
+    auto counter_class_ctx =
+        portal::import_from<portal::import_symbols::counter, napi_context_t>(module);
     napi_value counter_class = counter_class_ctx.callable();
     napi_value prototype = get_property(env, counter_class, "prototype");
-    napi_value member_add = get_property(env, prototype,
-        symbol_name<portal::import_symbols::counter::add>());
-    napi_value member_value = get_property(env, prototype,
-        symbol_name<portal::import_symbols::counter::value>());
+    napi_value member_add =
+        get_property(env, prototype, symbol_name<portal::import_symbols::counter::add>());
+    napi_value member_value =
+        get_property(env, prototype, symbol_name<portal::import_symbols::counter::value>());
 
     napi_value constructor_arg = int_value(env, 13);
     napi_value instance = nullptr;
@@ -588,8 +589,8 @@ int run_test(napi_env env) {
         return 73;
     }
 
-    if (value_to_int(env, call1(env, member_add, int_value(env, 29), instance)) != 42
-            || value_to_int(env, call0(env, member_value, instance)) != 13) {
+    if (value_to_int(env, call1(env, member_add, int_value(env, 29), instance)) != 42 ||
+        value_to_int(env, call0(env, member_value, instance)) != 13) {
         return 11;
     }
     if (env->type_tag_checks == 0) {
@@ -597,45 +598,37 @@ int run_test(napi_env env) {
     }
 
     portal::native::counter borrowed_counter(31u);
-    auto borrowed_object = portal::make_exported<
-        portal::exports::counter>(
-        export_ctx,
-        portal::borrow(borrowed_counter));
-    if (value_to_int(env, call1(env, member_add, int_value(env, 11), borrowed_object.get())) != 42
-            || value_to_int(env, call0(env, member_value, borrowed_object.get())) != 31) {
+    auto borrowed_object = portal::make_exported<portal::exports::counter>(
+        export_ctx, portal::borrow(borrowed_counter));
+    if (value_to_int(env, call1(env, member_add, int_value(env, 11), borrowed_object.get())) !=
+            42 ||
+        value_to_int(env, call0(env, member_value, borrowed_object.get())) != 31) {
         return 22;
     }
 
-    using consume_counter_sig = int(
-        portal::object_param<portal::export_classes::counter, portal::export_t>,
-        int);
+    using consume_counter_sig =
+        int(portal::object_param<portal::export_classes::counter, portal::export_t>, int);
     portal::export_consume_counter<consume_counter_sig>(
-        export_ctx,
-        module,
-        [](portal::native::counter& source, int value) {
+        export_ctx, module, [](portal::native::counter& source, int value) {
             return source.add(value);
         });
     napi_value consume_counter = get_property(env, module_value, "consume_counter");
-    if (value_to_int(env, call2(
-            env, consume_counter, borrowed_object.get(), int_value(env, 11))) != 42) {
+    if (value_to_int(env, call2(env, consume_counter, borrowed_object.get(), int_value(env, 11))) !=
+        42) {
         return 34;
     }
     if (call2(env, consume_counter, int_value(env, 7), int_value(env, 7)) != nullptr) {
         return 35;
     }
 
-    using use_callback_sig = int(
-        portal::callable_param<portal::import_symbols::callback, portal::import_t>,
-        int);
+    using use_callback_sig =
+        int(portal::callable_param<portal::import_symbols::callback, portal::import_t>, int);
     portal::export_use_callback<use_callback_sig>(
-        export_ctx,
-        module,
-        [](auto& callback_ctx, int value) {
+        export_ctx, module, [](auto& callback_ctx, int value) {
             return portal::call_callback(callback_ctx, value) + 1;
         });
     napi_value use_callback = get_property(env, module_value, "use_callback");
-    if (value_to_int(env, call2(
-            env, use_callback, callback, int_value(env, 7))) != 22) {
+    if (value_to_int(env, call2(env, use_callback, callback, int_value(env, 7))) != 22) {
         return 36;
     }
     if (call2(env, use_callback, int_value(env, 7), int_value(env, 7)) != nullptr) {
@@ -650,23 +643,19 @@ int run_test(napi_env env) {
     napi_value consumer_prototype = get_property(env, consumer_class, "prototype");
     napi_value combine = get_property(env, consumer_prototype, "combine");
     napi_value apply = get_property(env, consumer_prototype, "apply");
-    if (value_to_int(env, call2(
-            env, combine, borrowed_object.get(), int_value(env, 11), consumer_instance)) != 135
-            || value_to_int(env, call2(
-                env, apply, callback, int_value(env, 7), consumer_instance)) != 114) {
+    if (value_to_int(env, call2(env, combine, borrowed_object.get(), int_value(env, 11),
+                                consumer_instance)) != 135 ||
+        value_to_int(env, call2(env, apply, callback, int_value(env, 7), consumer_instance)) !=
+            114) {
         return 38;
     }
-    if (call2(env, consume_counter, consumer_instance, int_value(env, 1)) != nullptr
-            || call1(env, member_add, int_value(env, 1), consumer_instance) != nullptr) {
+    if (call2(env, consume_counter, consumer_instance, int_value(env, 1)) != nullptr ||
+        call1(env, member_add, int_value(env, 1), consumer_instance) != nullptr) {
         return 39;
     }
 
-    portal::export_instance<
-        portal::exports::counter>(
-        export_ctx,
-        module,
-        "globalCounter",
-        portal::borrow(borrowed_counter));
+    portal::export_instance<portal::exports::counter>(export_ctx, module, "globalCounter",
+                                                      portal::borrow(borrowed_counter));
     napi_value global_counter = get_property(env, module_value, "globalCounter");
     if (value_to_int(env, call1(env, member_add, int_value(env, 11), global_counter)) != 42) {
         return 23;
@@ -681,25 +670,24 @@ int run_test(napi_env env) {
     napi_value trusted_counter_class = get_property(env, trusted_module_value, "counter");
     napi_value trusted_constructor_arg = int_value(env, 17);
     napi_value trusted_instance = nullptr;
-    napi_new_instance(
-        env, trusted_counter_class, 1, &trusted_constructor_arg, &trusted_instance);
+    napi_new_instance(env, trusted_counter_class, 1, &trusted_constructor_arg, &trusted_instance);
     napi_value trusted_prototype = get_property(env, trusted_counter_class, "prototype");
     napi_value trusted_add = get_property(env, trusted_prototype, "add");
     const std::size_t checks_before_trusted_call = env->type_tag_checks;
-    if (value_to_int(env, call1(
-            env, trusted_add, int_value(env, 25), trusted_instance)) != 42
-            || env->type_tag_checks != checks_before_trusted_call) {
+    if (value_to_int(env, call1(env, trusted_add, int_value(env, 25), trusted_instance)) != 42 ||
+        env->type_tag_checks != checks_before_trusted_call) {
         return 41;
     }
 
     return 0;
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     const int lifetime_result = run_cleanup_lifetime_test();
-    if (lifetime_result != 0) return lifetime_result;
+    if (lifetime_result != 0)
+        return lifetime_result;
     napi_env env = napi_stub_create_env();
     // Lifetime contract: every portal wrapper/context must be destroyed
     // before the stub env. Their destructors call napi_delete_reference on

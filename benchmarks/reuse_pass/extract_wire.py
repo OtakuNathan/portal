@@ -15,15 +15,17 @@ a = p.parse_args()
 s = (a.root/'portal/backends/rpc.h').read_text()
 prelude = '''#include "portal/optional.h"
 namespace portal {
+#ifndef PORTAL_TRAITS_H
 template<class T> struct type_identity { using type = T; };
 constexpr std::size_t dynamic_arity = static_cast<std::size_t>(-1);
+#endif
 template<class> struct is_transactional_export_binder : std::false_type {};
 template<class> struct is_export_overload_binder : std::false_type {};
 }
 '''
 s = s.replace('#include "../error_policy.h"', '#include "portal/error_policy.h"')
 s = s.replace('#include "../backend_base.h"', prelude)
-marker = '    struct rpc_backend : backend_base<rpc_backend> {'
+marker = 'struct rpc_backend : backend_base<rpc_backend> {'
 assert s.count(marker) == 1
 s = s.split(marker)[0] + '} // namespace portal\n#endif\n'
 a.output.parent.mkdir(parents=True, exist_ok=True)

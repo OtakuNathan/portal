@@ -7,18 +7,22 @@ struct owned_task {
     std::atomic<int>* invoked;
     std::atomic<int>* unsafe;
     owned_task(PyObject* obj, std::atomic<int>& ran, std::atomic<int>& bad)
-        : object(obj), invoked(&ran), unsafe(&bad) { Py_INCREF(object); }
+        : object(obj), invoked(&ran), unsafe(&bad) {
+        Py_INCREF(object);
+    }
     owned_task(owned_task&& other) noexcept
         : object(other.object), invoked(other.invoked), unsafe(other.unsafe) {
         other.object = nullptr;
     }
     owned_task(const owned_task&) = delete;
     void operator()() noexcept {
-        if (!PyGILState_Check()) ++*unsafe;
+        if (!PyGILState_Check())
+            ++*unsafe;
         ++*invoked;
     }
     ~owned_task() noexcept {
-        if (!object) return;
+        if (!object)
+            return;
         if (!PyGILState_Check()) {
             ++*unsafe; // Report regression without invoking unsafe Python code.
             return;
@@ -40,8 +44,8 @@ int main() {
         executor.shutdown();
     }
     const bool ok = invoked == 1000 && unsafe == 0 && Py_REFCNT(object) == references;
-    std::printf("invoked=%d unsafe=%d remaining_refs=%zd\n",
-        invoked.load(), unsafe.load(), Py_REFCNT(object));
+    std::printf("invoked=%d unsafe=%d remaining_refs=%zd\n", invoked.load(), unsafe.load(),
+                Py_REFCNT(object));
     Py_DECREF(object);
     Py_Finalize();
     return ok ? 0 : 1;
