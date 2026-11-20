@@ -1,8 +1,8 @@
 #define PORTAL_EXPORT_DEF "export.def"
 #include <portal/portal.h>
+#include <portal/rpc.h>
 #include <portal/backends/rpc.h>
 #include <portal/backends/rpc_reuse.h>
-#include <portal/rpc/typed_async.h>
 #if defined(__linux__) || defined(__APPLE__)
 #include <portal/rpc/tcp_sender.h>
 #endif
@@ -20,6 +20,13 @@ struct packet {
     X(T, 1, sequence, portal::wire::u32)                                                           \
     X(T, 2, payload, portal::wire::blob<1024>)
 PORTAL_WIRE_RECORD(packet, 1, 1, PACKAGE_PACKET_FIELDS);
+
+template <class Group, class Signature>
+struct package_routes;
+template <>
+struct package_routes<portal::export_groups::package_ping, int(int)> {
+    using type = portal::typed_rpc::signature_method<2, 1, int(int)>;
+};
 
 bool check_metadata();
 
@@ -53,14 +60,22 @@ int main() {
         return 1;
 
     namespace typed = portal::typed_rpc;
-    using echo = typed::method<1, 1, portal::wire::record<packet>, portal::wire::record<packet>>;
+    using echo = typed::signature_method<1, 1, packet(packet)>;
     typed::router server;
     if (server.define<echo>([](packet value) noexcept {
             return value;
         }) != typed::errc::ok)
         return 2;
+    using ping_group = portal::export_groups::package_ping;
+    if (typed::define_export<ping_group, int(int), package_routes>(server, [](int value) {
+            return value + 1;
+        }) != typed::errc::ok)
+        return 6;
     typed::loopback_transport transport(server);
     typed::workspace storage;
+    auto ping = typed::call<package_routes<ping_group, int(int)>::type>(transport, storage, {}, 41);
+    if (!ping || ping.value != 42)
+        return 7;
     packet input;
     input.sequence = 42;
     input.payload = std::string("a\0b", 3);

@@ -48,20 +48,40 @@ int main() {
     auto owner = std::make_shared<backend::context>();
     using D = portal::async_counter<backend::context>;
     const auto view = portal::bind_async<portal::async_counter>(owner, D::object_t{1});
+    const auto erased_view =
+        portal::bind_erased_async<portal::async_counter>(owner, D::object_t{1});
     const auto static_view =
         portal::bind_static_async<portal::async_counter>(owner, D::object_t{1});
     int n = 0;
-    std::move(view.add(4)).start([&](portal::async_result<int> r) noexcept {
+    auto concrete_call = view.add(4);
+    static_assert(!std::is_same<decltype(concrete_call), portal::invocation<int>>::value,
+                  "bind_async defaults to concrete/typed invocation");
+    std::move(concrete_call).start([&](portal::async_result<int> r) noexcept {
         n = *r.value;
     });
     CHECK(n == 14);
+    auto erased_call = erased_view.add(6);
+    static_assert(std::is_same<decltype(erased_call), portal::invocation<int>>::value,
+                  "bind_erased_async produces erased invocation");
+    std::move(erased_call).start([&](portal::async_result<int> r) noexcept {
+        n = *r.value;
+    });
+    CHECK(n == 16);
     std::move(static_view.value()).start([&](portal::async_result<int> r) noexcept {
         n = *r.value;
     });
     CHECK(n == 10);
     auto echo = portal::async_functions::async_echo(owner, std::string("owned"));
+    static_assert(!std::is_same<decltype(echo), portal::invocation<std::string>>::value,
+                  "async_functions default to concrete/typed invocation");
     std::move(echo).start([](portal::async_result<std::string> r) noexcept {
         CHECK(*r.value == "owned");
+    });
+    auto erased_echo = portal::async_functions::async_echo<true>(owner, std::string("erased"));
+    static_assert(std::is_same<decltype(erased_echo), portal::invocation<std::string>>::value,
+                  "async_functions<true> opts into erased invocation");
+    std::move(erased_echo).start([](portal::async_result<std::string> r) noexcept {
+        CHECK(*r.value == "erased");
     });
     std::puts("async projections passed");
 }

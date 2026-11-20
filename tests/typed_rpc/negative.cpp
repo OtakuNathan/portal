@@ -13,6 +13,22 @@ template <class, class>
 struct wrong_route {
     using type = tr::method<1, 1, w::i32>;
 };
+#elif NEGATIVE_CASE == 8 || NEGATIVE_CASE == 9 || NEGATIVE_CASE == 11 || NEGATIVE_CASE == 12
+#include "portal/rpc/typed_export.h"
+struct Packet {};
+#define PORTAL_EXPORT_DEF "tests/typed_rpc/export.def"
+#include "portal/export.h"
+#undef PORTAL_EXPORT_DEF
+template <class, class>
+struct wrong_export_route {
+    using type = tr::method<1, 1, w::i32>;
+};
+#if NEGATIVE_CASE == 11 || NEGATIVE_CASE == 12
+template <class Symbol, class Signature>
+struct matching_route {
+    using type = tr::signature_method<1, 1, Signature>;
+};
+#endif
 #elif NEGATIVE_CASE == 0
 #define F(X, T) X(T, 1, a, w::u32) X(T, 2, b, w::u32)
 PORTAL_WIRE_RECORD(Bad, 1, 1, F);
@@ -59,7 +75,35 @@ int main() {
 #elif NEGATIVE_CASE == 7
     using context = tr::direct_import_backend<int, wrong_route>::context;
     auto endpoint = std::make_shared<context>(std::make_shared<int>());
-    auto invalid = portal::async_functions::typed_ping<false>(endpoint);
+    auto invalid = portal::async_functions::typed_ping(endpoint);
     (void)invalid;
+#elif NEGATIVE_CASE == 8
+    tr::router r;
+    tr::define_export<portal::export_groups::typed_free_ping, std::int32_t(), wrong_export_route>(
+        r, []() {
+            return std::int32_t(0);
+        });
+#elif NEGATIVE_CASE == 9
+    tr::router r;
+    tr::define_export<portal::export_groups::typed_free_ping, void(), wrong_export_route>(r,
+                                                                                          []() {});
+#elif NEGATIVE_CASE == 10
+    using bad_codec = w::default_codec_t<Bad>;
+    (void)sizeof(bad_codec);
+#elif NEGATIVE_CASE == 11
+    tr::router r;
+    tr::define_export<portal::export_groups::typed_free_add,
+                      std::int32_t(std::int32_t, std::int32_t), matching_route>(
+        r, [](std::int32_t, std::int32_t) {
+            return std::int64_t{1};
+        });
+#elif NEGATIVE_CASE == 12
+    tr::router r;
+    tr::define_export<portal::export_groups::typed_free_ping, void(), matching_route>(r, [] {
+        return 1;
+    });
+#elif NEGATIVE_CASE == 13
+    using invalid = tr::signature_method<1, 1, void(std::int32_t&)>;
+    (void)sizeof(invalid);
 #endif
 }

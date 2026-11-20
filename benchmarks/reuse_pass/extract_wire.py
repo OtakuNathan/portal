@@ -14,14 +14,14 @@ p.add_argument('output', type=Path)
 a = p.parse_args()
 s = (a.root/'portal/backends/rpc.h').read_text()
 prelude = '''#include "portal/optional.h"
-namespace portal {
 #ifndef PORTAL_TRAITS_H
+namespace portal {
 template<class T> struct type_identity { using type = T; };
 constexpr std::size_t dynamic_arity = static_cast<std::size_t>(-1);
-#endif
 template<class> struct is_transactional_export_binder : std::false_type {};
 template<class> struct is_export_overload_binder : std::false_type {};
 }
+#endif
 '''
 s = s.replace('#include "../error_policy.h"', '#include "portal/error_policy.h"')
 s = s.replace('#include "../backend_base.h"', prelude)

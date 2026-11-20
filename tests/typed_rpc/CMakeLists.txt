@@ -34,6 +34,7 @@ function(portal_typed_rpc_test name source)
 endfunction()
 portal_typed_rpc_test(typed_rpc_codec codec_test.cpp)
 portal_typed_rpc_test(typed_rpc_async async_test.cpp)
+portal_typed_rpc_test(typed_rpc_export export_test.cpp)
 if(CMAKE_SYSTEM_NAME MATCHES "^(Linux|Darwin)$")
     portal_typed_rpc_test(tcp_sender tcp_sender_test.cpp)
 endif()
@@ -50,8 +51,14 @@ set(contract_diagnostics
     "typed RPC arguments must match the declared value types"
     "typed RPC handler must return the declared type exactly"
     "vector<bool> is not a wire sequence"
-    "typed RPC method must match the selected import signature")
-foreach(case RANGE 0 7)
+    "typed RPC method must match the selected import signature"
+    "typed RPC export signature is not declared in this export group"
+    "typed RPC method must match the selected export signature"
+    "type has no default wire codec"
+    "typed RPC handler must return the declared type exactly"
+    "none codec requires a void-returning handler"
+    "typed RPC arguments cannot be non-const lvalue references")
+foreach(case RANGE 0 13)
     try_compile(contract_compiled
         "${CMAKE_CURRENT_BINARY_DIR}/compile_checks/${case}"
         "${CMAKE_CURRENT_SOURCE_DIR}/negative.cpp"
@@ -87,7 +94,7 @@ else()
 endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     foreach(strict RANGE 0 1)
-        foreach(kind codec async)
+        foreach(kind codec async export)
             set(name "typed_rpc_${kind}_noexcept_${strict}")
             portal_typed_rpc_test(${name} "${kind}_test.cpp")
             target_compile_options(${name}_test PRIVATE -fno-exceptions)

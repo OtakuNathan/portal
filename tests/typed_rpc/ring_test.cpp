@@ -114,9 +114,9 @@ static void check_async(bool erased, bool stop) {
         std::move(call).start(handler);
     };
     if (erased)
-        start(portal::bind_async<portal::typed_service>(endpoint, service::object_t{}));
+        start(portal::bind_erased_async<portal::typed_service>(endpoint, service::object_t{}));
     else
-        start(portal::bind_static_async<portal::typed_service>(endpoint, service::object_t{}));
+        start(portal::bind_async<portal::typed_service>(endpoint, service::object_t{}));
     endpoint.reset();
     CHECK(count == 0 && t->ring.producer_paused());
     if (stop)

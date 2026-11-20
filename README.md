@@ -11,8 +11,9 @@ supplies the platform-specific runtime operations.
 C++ callable shape x backend runtime x converter set = usable boundary call
 ```
 
-The repository includes minimal CPython C API and Node-API backends, a framed
-dynamic RPC backend, a typed RPC module, and a fake backend used by the core tests.
+The repository includes minimal CPython C API and Node-API backends, a typed
+RPC module (the default RPC path), a sideway dynamic tagged-value RPC backend, and a
+fake backend used by the core tests.
 
 Portal was previously named Dyna Bridge. The public API now uses
 `<portal/...>` headers, the `portal::` namespace and `PORTAL_*` macros.
@@ -182,23 +183,32 @@ of their project with a newer standard.
 
 ## Choose an RPC style
 
-| Wire protocol | When to use it | Public API |
+**Typed RPC is Portal's mainstream/default RPC path.** Concrete typed async views
+are the default; type-erased invocations (`bind_erased_async`, `invocation<R>`)
+and dynamic tagged-value RPC (`<portal/backends/rpc.h>`) remain available as
+explicit sideway paths.
+
+| Wire protocol | Role | Public API |
 | --- | --- | --- |
-| Dynamic RPC | Peers exchange tagged values. Generated `.def` calls use converters and select the first viable overload in declaration order. | `<portal/backends/rpc.h>`, with reusable buffers in `<portal/backends/rpc_reuse.h>` |
-| Typed RPC | Peers share a method ID, revision and value schema. The method codecs handle scalars, records and sequences directly. | `<portal/rpc/typed.h>` for synchronous calls and `<portal/rpc/typed_async.h>` for owned async calls |
+| Typed RPC (default) | Peers share a method ID, revision and value schema. Supports `.def` imports/exports, default wire codecs (`signature_method`), records, sequences and encoding directly into reserved send buffers. | `<portal/rpc.h>` (`<portal/rpc/typed.h>`, `typed_async.h`, `typed_import.h`, `typed_export.h`) |
+| Dynamic / tagged RPC (sideway) | Peers exchange runtime-tagged values (`DRPC`/`DRPR`). Useful for dynamic overload probing in declaration order or legacy untyped peers. | `<portal/backends/rpc.h>`, with reusable buffers in `<portal/backends/rpc_reuse.h>` |
 
 Both peers must agree on the wire protocol. Both styles let the application supply
-the transport. [Dynamic RPC example](docs/reference.md#rpc-backend) ·
-[Typed RPC schema and synchronous example](docs/typed_rpc.md#synchronous-owning-calls)
+the transport. [Typed RPC schema, `.def` binding and examples](docs/typed_rpc.md) ·
+[Sideway dynamic RPC example](docs/reference.md#rpc-backend)
 
-### Concrete and type-erased async RPC
+### Concrete (default) and type-erased (sideway) async RPC
 
 A service declared in a module's `.def` can call a typed endpoint by name.
 Map each generated symbol and signature to a wire method with
-`typed_rpc::direct_import_backend`, then bind the service once.
-`client.add(a, b)` returns a concrete call with `bind_static_async`, or a
-type-erased call with `bind_async`. Both use the same transport reservation,
-wire codec and completion path. [Build a generated async client](docs/typed_rpc.md#generated-async-imports)
+`typed_rpc::direct_import_backend` (and `typed_rpc::define_export` / `export_class`
+on the server), then bind the service once.
+`client.add(a, b)` returns a concrete typed call by default with `bind_async`
+(`bind_static_async` is kept as an alias), or an erased call through the sideway
+`bind_erased_async`. Both use the same transport reservation,
+wire codec and completion path. When upgrading a queue that stores
+`invocation<R>`, switch its member-call binding to `bind_erased_async`.
+[Build a generated async client](docs/typed_rpc.md#generated-async-imports)
 
 With typed RPC, `make_rpc_invocation<Method>` prepares an owning frame for a
 byte-vector transport. `make_direct_rpc_invocation<Method>` takes ownership of
@@ -299,8 +309,8 @@ target_link_libraries(my_addon PRIVATE portal::portal)
 | Core | C++14 header-only import/export contracts, overloads, classes, callbacks, and typed object channels |
 | Python | Minimal CPython C API backend with real runtime tests |
 | JavaScript | Minimal Node-API backend with real Node.js runtime tests |
-| Dynamic RPC | Transport-agnostic tagged frames with existing backend/converter and overload contracts |
-| Typed RPC | Public C++14 codecs, protocol-v1 typed frames, owning dispatch/results, storage reuse and async adapter |
+| Typed RPC (default) | Public C++14 codecs, `signature_method`, protocol-v1 typed frames, `.def` import/export adapters, owning dispatch/results, storage reuse and concrete-default async calls |
+| Dynamic RPC (sideway) | Transport-agnostic tagged frames with existing backend/converter and overload probing contracts |
 | Scheduling | Optional Python interpreter adapter; libuv loop dispatch uses Flux Foundry's executor directly |
 | Value types | Built-in Python/Node converters for `int`, `unsigned`, and UTF-8 text through `std::string`; embedded NUL is preserved, while arbitrary binary data needs its own converter |
 | Platforms | CI builds Debug and Release on Linux, macOS, and Windows |

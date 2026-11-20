@@ -66,14 +66,17 @@ single-source requirement.
 
 ## Extension Boundary
 
-RPC has two public entry points. The dynamic backend in `portal/backends/rpc.h`
-uses the callable/backend/converter composition and its existing tagged frames.
-The value-schema module in `portal/rpc/typed.h` projects an explicit method into
-a C++ signature and protocol-v1 codec, then decodes owning arguments before
-dispatch. It has its own declared method IDs/revisions and wire format. Both
-styles preserve their respective contracts when used in one application.
-Typed RPC async calls compose through the existing `static_invocation` and FF
-adapter; no executor policy is added to either core. See [Typed RPC](typed_rpc.md).
+RPC uses Typed RPC (`portal/rpc.h`, `portal/rpc/typed*.h`) as its mainstream
+default path: an explicit method or `signature_method` projects a C++ signature
+and protocol-v1 codec, supports `.def` imports (`typed_import.h`, concrete by
+default via `bind_async`) and exports (`typed_export.h`), and decodes owning
+arguments before dispatch. The dynamic tagged backend in `portal/backends/rpc.h`
+and type-erased invocations (`bind_erased_async`, `invocation<R>`) remain
+available as explicit sideway paths when runtime-tagged overload probing or
+heterogeneous erased queues are needed. Both styles preserve their respective
+contracts when used in one application. Typed RPC async calls compose through
+the existing `static_invocation` and FF adapter; no executor policy is added to
+either core. See [Typed RPC](typed_rpc.md).
 
 A new backend derives from `backend_base<Derived>` and fills the operations its
 runtime supports. Context types choose concrete state, such as a direct

@@ -85,7 +85,7 @@ namespace async_functions {
 #define BEGIN_CLASS(clazz)
 #define END_CLASS
 #define BEGIN_MEMBER_CALLABLE_GROUP(name)
-#define BEGIN_CALLABLE_GROUP(name) template<bool Erased=true,class C,class... A> auto name(std::shared_ptr<C> owner,A&&... args) { \
+#define BEGIN_CALLABLE_GROUP(name) template<bool Erased=false,class C,class... A> auto name(std::shared_ptr<C> owner,A&&... args) { \
     async_detail::require(bool(owner)); \
     using Symbol=import_symbols::name; \
     using Selector=import_contract_selector_group<typename Symbol::overloads_t,C>; \

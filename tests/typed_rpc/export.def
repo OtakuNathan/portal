@@ -1,0 +1,24 @@
+BEGIN_CALLABLE_GROUP(typed_free_add)
+    DECL_CALLABLE(std::int32_t, std::int32_t, std::int32_t)
+    DECL_CALLABLE(std::string, const std::string&)
+END_CALLABLE_GROUP
+
+BEGIN_CALLABLE_GROUP(typed_free_ping)
+    DECL_CALLABLE(void)
+END_CALLABLE_GROUP
+
+BEGIN_INTERFACE(typed_echo_iface)
+    BEGIN_MEMBER_CALLABLE_GROUP(echo)
+        DECL_MEMBER_FUNCTION(std::string, const std::string&)
+        DECL_MEMBER_FUNCTION(std::int32_t, std::int32_t, std::int32_t)
+    END_MEMBER_CALLABLE_GROUP
+END_INTERFACE
+
+BEGIN_CLASS(typed_native, service_impl)
+    IMPLEMENTS(typed_echo_iface)
+    DECL_CONSTRUCTOR(std::int32_t)
+
+    BEGIN_MEMBER_CALLABLE_GROUP(roundtrip_packet)
+        DECL_MEMBER_FUNCTION(Packet, const Packet&)
+    END_MEMBER_CALLABLE_GROUP
+END_CLASS

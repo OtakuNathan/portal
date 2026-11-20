@@ -604,6 +604,89 @@ struct record_definition : detail::minimum_size<detail::fields_meta<Fields...>::
 template <class T>
 struct record : schema<T> {};
 
+constexpr std::size_t default_blob_limit = 1024 * 1024;
+constexpr std::size_t default_sequence_limit = 65536;
+
+template <class T>
+struct has_wire_schema : std::false_type {};
+
+template <class T, class Enable = void>
+struct default_codec {
+    static_assert(
+        detail::missing_schema<T>::value,
+        "type has no default wire codec; use an explicit wire codec or PORTAL_WIRE_RECORD");
+};
+template <>
+struct default_codec<std::uint8_t> {
+    using type = u8;
+};
+template <>
+struct default_codec<std::uint16_t> {
+    using type = u16;
+};
+template <>
+struct default_codec<std::uint32_t> {
+    using type = u32;
+};
+template <>
+struct default_codec<std::uint64_t> {
+    using type = u64;
+};
+template <>
+struct default_codec<std::int8_t> {
+    using type = i8;
+};
+template <>
+struct default_codec<std::int16_t> {
+    using type = i16;
+};
+template <>
+struct default_codec<std::int32_t> {
+    using type = i32;
+};
+template <>
+struct default_codec<std::int64_t> {
+    using type = i64;
+};
+template <>
+struct default_codec<bool> {
+    using type = boolean;
+};
+template <>
+struct default_codec<double> {
+    using type = f64;
+};
+template <>
+struct default_codec<void> {
+    using type = none;
+};
+template <>
+struct default_codec<unit> {
+    using type = none;
+};
+template <>
+struct default_codec<std::string> {
+    using type = blob<default_blob_limit>;
+};
+template <class T, std::size_t N>
+struct default_codec<std::array<T, N>> {
+    using type = array<typename default_codec<T>::type, N>;
+};
+template <class T>
+struct default_codec<std::vector<T>> {
+    using type = sequence<typename default_codec<T>::type, default_sequence_limit>;
+};
+template <class T>
+struct default_codec<option<T>> {
+    using type = maybe<typename default_codec<T>::type>;
+};
+template <class T>
+struct default_codec<T, typename std::enable_if<has_wire_schema<T>::value>::type> {
+    using type = record<T>;
+};
+template <class T>
+using default_codec_t = typename default_codec<T>::type;
+
 // An owning result. T must be default constructible. Failure does not expose a
 // partly decoded value: public decode helpers commit only on full validation.
 template <class T>
@@ -653,6 +736,8 @@ errc encode_into(const typename C::value_type& x, bytes& out, limits l = {}) {
                   "wire field C++ type must match codec value_type");
 #define PORTAL_WIRE_RECORD(T, ID, REVISION, FIELDS)                                                \
     FIELDS(PORTAL_WIRE_DETAIL_CHECK_MEMBER, T)                                                     \
+    template <>                                                                                    \
+    struct portal::wire::has_wire_schema<T> : ::std::true_type {};                                 \
     template <>                                                                                    \
     struct portal::wire::schema<T>                                                                 \
         : ::portal::wire::record_definition<                                                       \

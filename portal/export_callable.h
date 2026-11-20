@@ -667,6 +667,7 @@ private:
     static optional<dynamic_value_t> call_impl(Context& ctx, Callable& callable, Accessor accessor,
                                                export_arguments_plan<Context, Args...>& plan,
                                                std::index_sequence<Indices...>) {
+        (void)accessor; // A zero-argument signature has no argument slots to read.
         auto converted = std::make_tuple(plan.template convert<Indices>(ctx, accessor)...);
         if (!accepted_export_arguments<Context>(converted))
             return {};
@@ -680,6 +681,7 @@ private:
     static optional<dynamic_value_t> call_impl(Context& ctx, Callable& callable, Accessor accessor,
                                                export_arguments_plan<Context, Args...>& plan,
                                                std::index_sequence<Indices...>) {
+        (void)accessor; // A zero-argument signature has no argument slots to read.
         auto converted = std::make_tuple(plan.template convert<Indices>(ctx, accessor)...);
         if (!accepted_export_arguments<Context>(converted))
             return {};

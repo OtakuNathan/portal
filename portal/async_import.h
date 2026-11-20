@@ -151,15 +151,21 @@ public:
 } // namespace async_detail
 template <template <class> class Delegate>
 struct async_class_traits;
+#define PORTAL_ASYNC_CONCRETE_DEFAULT 1
+
 template <template <class> class Delegate, class Context, class Object>
 auto bind_async(std::shared_ptr<Context> owner, Object&& object) {
+    return async_class_traits<Delegate>::template bind<false>(std::move(owner),
+                                                              std::forward<Object>(object));
+}
+template <template <class> class Delegate, class Context, class Object>
+auto bind_erased_async(std::shared_ptr<Context> owner, Object&& object) {
     return async_class_traits<Delegate>::template bind<true>(std::move(owner),
                                                              std::forward<Object>(object));
 }
 template <template <class> class Delegate, class Context, class Object>
 auto bind_static_async(std::shared_ptr<Context> owner, Object&& object) {
-    return async_class_traits<Delegate>::template bind<false>(std::move(owner),
-                                                              std::forward<Object>(object));
+    return bind_async<Delegate>(std::move(owner), std::forward<Object>(object));
 }
 } // namespace portal
 #endif

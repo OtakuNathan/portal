@@ -453,6 +453,11 @@ namespace portal {
                 { \
                     return receiver.name(std::forward<Args>(args)...); \
                 } \
+                template <typename NativeTarget, typename... Args> \
+                static decltype(auto) call_native(NativeTarget& target, Args&&... args) \
+                { \
+                    return target.name(std::forward<Args>(args)...); \
+                } \
             };
 #define DECL_MEMBER_FUNCTION(...)
 #define END_MEMBER_CALLABLE_GROUP
@@ -543,6 +548,11 @@ namespace portal {
                     -> decltype(receiver.name(std::forward<Args>(args)...)) \
                 { \
                     return receiver.name(std::forward<Args>(args)...); \
+                } \
+                template <typename NativeTarget, typename... Args> \
+                static decltype(auto) call_native(NativeTarget& target, Args&&... args) \
+                { \
+                    return target.name(std::forward<Args>(args)...); \
                 } \
             };
 #define DECL_MEMBER_FUNCTION(...)

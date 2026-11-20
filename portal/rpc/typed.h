@@ -1,7 +1,9 @@
 #ifndef PORTAL_RPC_TYPED_H
 #define PORTAL_RPC_TYPED_H
+#include "../traits.h"
 #include "../wire/schema.h"
 #include <algorithm>
+#include <iterator>
 #include <memory>
 #include <new>
 #include <stdexcept>
@@ -112,6 +114,30 @@ template <std::uint64_t Id, std::uint32_t Revision, class Return, class... Argum
 constexpr std::uint32_t method<Id, Revision, Return, Arguments...>::revision;
 template <std::uint64_t Id, std::uint32_t Revision, class Return, class... Arguments>
 constexpr std::size_t method<Id, Revision, Return, Arguments...>::arity;
+
+namespace detail {
+template <std::uint64_t Id, std::uint32_t Revision, class Signature>
+struct signature_method_builder;
+
+template <std::uint64_t Id, std::uint32_t Revision, class R, class... Args>
+struct signature_method_builder<Id, Revision, R(Args...)> {
+    static_assert(!std::is_reference<R>::value,
+                  "typed RPC return type cannot be a reference; use a value or void instead");
+    static_assert(are_bridge_params_valid<Args...>::value,
+                  "typed RPC arguments cannot be non-const lvalue references");
+    using type = method<Id, Revision, wire::default_codec_t<R>,
+                        wire::default_codec_t<typename std::decay<Args>::type>...>;
+    static_assert(
+        std::is_same<typename type::signature_t, R(typename std::decay<Args>::type...)>::value,
+        "default codecs must preserve the declared signature; use void for wire::none");
+};
+} // namespace detail
+
+// Project a standard C++ signature onto protocol-v1 default wire codecs.
+// Use method<Id, Revision, ...> directly when custom bounds or codecs are needed.
+template <std::uint64_t Id, std::uint32_t Revision, class Signature>
+using signature_method = typename detail::signature_method_builder<Id, Revision, Signature>::type;
+
 struct envelope {
     std::uint32_t magic = 0;
     std::uint16_t version = 0;
@@ -396,6 +422,37 @@ public:
         std::unique_ptr<entry_base> impl(new E(std::forward<F>(fn)));
         route r{Method::id, Method::fingerprint(), Method::revision, std::move(impl)};
         routes_.insert(pos, std::move(r));
+        return errc::ok;
+    }
+    // Commit a sorted registration batch. All checks and allocation precede ownership transfer.
+    errc merge(router&& added) {
+        if (this == &added)
+            return errc::invalid_value;
+        if (added.routes_.empty())
+            return errc::ok;
+        if (routes_.empty()) {
+            routes_.swap(added.routes_);
+            return errc::ok;
+        }
+        if (added.size() > routes_.max_size() - size())
+            return errc::limit_exceeded;
+        auto existing = routes_.begin();
+        for (const auto& row : added.routes_) {
+            while (existing != routes_.end() && key(*existing) < key(row))
+                ++existing;
+            if (existing != routes_.end() && key(*existing) == key(row))
+                return errc::invalid_value;
+        }
+        std::vector<route> merged;
+        merged.reserve(size() + added.size());
+        std::merge(std::make_move_iterator(routes_.begin()), std::make_move_iterator(routes_.end()),
+                   std::make_move_iterator(added.routes_.begin()),
+                   std::make_move_iterator(added.routes_.end()), std::back_inserter(merged),
+                   [](const route& a, const route& b) {
+                       return key(a) < key(b);
+                   });
+        routes_.swap(merged);
+        added.routes_.clear();
         return errc::ok;
     }
     errc dispatch_into(const bytes& frame, bytes& reply, limits l = {}) const {

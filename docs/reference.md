@@ -104,12 +104,16 @@ files. The core defaults are empty, so real modules opt into their own tables.
 
 ## Included Backends
 
-The repository includes four backend implementations:
+For RPC between peers with a shared schema, start with `<portal/rpc.h>`.
+It exposes typed codecs, generated imports and exports, and concrete async calls.
+[Typed RPC guide](typed_rpc.md)
+
+The backend implementations also include the following:
 
 - `tests/fake_backend.h` is a small in-memory backend for core tests.
 - `portal/backends/python.h` is a minimal Python C API backend.
 - `portal/backends/napi.h` is a minimal N-API backend.
-- `portal/backends/rpc.h` is a transport-agnostic framed RPC backend.
+- `portal/backends/rpc.h` is the transport-agnostic dynamic tagged RPC backend.
 
 Backend headers declare their `converter<T>` primary template and include their
 default value specializations at the end, for example `python.h` includes
@@ -279,7 +283,7 @@ Descriptors are interpreted by the direction of their def file:
 `OBJECT` parameters are borrowed for the duration of the call. Callable context
 ownership and thread policy remain backend/caller responsibilities. Descriptor
 returns are intentionally unsupported; use normal value returns or an explicit
-backend object API. The included RPC backend remains scalar and rejects these
+backend object API. The dynamic RPC backend remains scalar and rejects these
 descriptors until an RPC implementation supplies identity hooks.
 
 Each free group becomes an overload set, a same-name binder, and a direct import
@@ -822,15 +826,12 @@ those wrappers.
 
 ## RPC Backend
 
-Portal supports this dynamic backend and the public [typed RPC module](typed_rpc.md).
-Use the dynamic backend for existing `.def` declarations, converters and ordered
-overloads. Typed RPC uses explicit fixed method/value schemas and its own
-protocol-v1 frames. Both support owning values and explicit storage reuse, and
-both peers must select the same wire protocol. Link either API through the
-existing `portal::portal` CMake target.
+Use `<portal/rpc.h>` for typed calls. Select `<portal/backends/rpc.h>` for peers
+that exchange dynamic tagged values or use converter-based overload probing.
+Both link through `portal::portal`. Erasing a typed invocation for storage in a
+queue preserves its typed wire protocol. [Typed RPC guide](typed_rpc.md)
 
-RPC is the same bridge contract with a serialized `dynamic_value_t`. The RPC
-backend hashes the generated static symbol name once, converts arguments to
+The dynamic RPC backend hashes the generated static symbol name once, converts arguments to
 tagged wire values, and delegates I/O to a transport with one operation:
 
 ```cpp
@@ -1390,9 +1391,16 @@ Portal is licensed under the Apache License 2.0. See [`LICENSE`](../LICENSE).
 ## Owned asynchronous invocations
 
 The import schema also generates asynchronous class delegates and free functions.
-`bind_async<Delegate>(context_owner, object)` erases the operation into
-`invocation<R>`. `bind_static_async<Delegate>(context_owner, object)` preserves its
-concrete callable type. Both use the same schema symbols and original overload
+`bind_async<Delegate>(context_owner, object)` preserves the concrete typed
+callable (`static_invocation`) by default (`bind_static_async` is kept as an
+alias). `bind_erased_async<Delegate>(context_owner, object)` is the sideway
+entry point that erases the operation into `invocation<R>`. Likewise, generated
+free functions in `portal::async_functions::name(owner, args...)` default to
+concrete calls, while `name<true>(owner, args...)` opts into erased calls.
+When upgrading code that stored the previous default in an `invocation<R>` queue,
+use `bind_erased_async` for members and `name<true>` for free functions. The
+feature macro `PORTAL_ASYNC_CONCRETE_DEFAULT` is defined to 1 by `async_import.h`. Both
+use the same schema symbols and original overload
 selection; synchronous delegates and wire identifiers are unchanged. Constructors
 remain synchronous. A backend opts in by implementing
 `prepare_async<Symbol, Contract>(receiver_owner, captured_tuple)` and, for free
@@ -1400,8 +1408,10 @@ functions, `prepare_async_free<Symbol, Contract>(context_owner, captured_tuple)`
 These hooks prepare a cold operation, not a synchronous call disguised as async.
 
 ```cpp
-auto gpu = portal::bind_static_async<portal::gpu>(owner, object);
+auto gpu = portal::bind_async<portal::gpu>(owner, object);
 auto call = gpu.add_one(41); // static_invocation<int, Context, Callable>
+// Sideway erased view when heterogeneous queues need invocation<R>:
+auto erased_gpu = portal::bind_erased_async<portal::gpu>(owner, object);
 // The backend can also construct a native operation directly:
 auto native = portal::make_invocation<int>(owner,
     [](auto& context, auto completion) noexcept {

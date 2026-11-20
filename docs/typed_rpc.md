@@ -1,32 +1,35 @@
 # Typed RPC
 
-Typed RPC is a supported public C++14 module, available through the existing
-`portal::portal` CMake target and installed headers. It supplies value codecs,
-checked protocol-v1 envelopes, native dispatch, explicit storage reuse and an
-owning asynchronous transport adapter.
+Typed RPC is Portal's **default/mainstream** public C++14 RPC module, available
+through the existing `portal::portal` CMake target and installed headers. It
+supplies value codecs, default C++ signature projections (`signature_method`),
+checked protocol-v1 envelopes, `.def` import/export adapters, native dispatch,
+explicit storage reuse and an owning asynchronous transport adapter.
 
 | Header | Public API |
 | --- | --- |
-| `<portal/wire/schema.h>` | `portal::wire` codecs, limits, results and `PORTAL_WIRE_RECORD` |
-| `<portal/rpc/typed.h>` | `portal::typed_rpc::method`, `router`, `workspace`, `call` and frame helpers |
-| `<portal/rpc/typed_async.h>` | `make_rpc_invocation`, typed error category and owning async adapter |
-| `<portal/rpc/typed_import.h>` | `direct_import_backend` maps generated async imports to a writable typed transport |
+| `<portal/rpc.h>` | Umbrella entry point including `typed.h`, `typed_async.h`, `typed_import.h` and `typed_export.h` |
+| `<portal/wire/schema.h>` | `portal::wire` codecs, `default_codec_t`, limits, results and `PORTAL_WIRE_RECORD` |
+| `<portal/rpc/typed.h>` | `portal::typed_rpc::method`, `signature_method`, `router`, `workspace`, `call` and frame helpers |
+| `<portal/rpc/typed_async.h>` | `make_rpc_invocation`, `make_direct_rpc_invocation`, typed error category and owning async adapter |
+| `<portal/rpc/typed_import.h>` | `direct_import_backend` maps generated async imports (`bind_async` concrete default, `bind_erased_async` sideway) |
+| `<portal/rpc/typed_export.h>` | `define_export` and `export_class` map `PORTAL_EXPORT_DEF` free functions and classes onto `typed_rpc::router` |
 
 ## Choose an RPC style
 
 Both RPC styles are supported and may be included in the same application.
 
-| Need | Entry point |
-| --- | --- |
-| Existing Portal `.def` declarations, converters, first-viable overloads, custom binders or the existing tagged protocol | `<portal/backends/rpc.h>`; opt into storage reuse with `<portal/backends/rpc_reuse.h>` |
-| Explicit shared value schemas, fixed method contracts and direct owning record/sequence codecs | `<portal/rpc/typed.h>`; use `<portal/rpc/typed_async.h>` for owned async calls |
+| Role | Need | Entry point |
+| --- | --- | --- |
+| Mainstream / default | Explicit shared value schemas, fixed method contracts, `.def` typed imports/exports and direct owning record/sequence codecs | `<portal/rpc.h>` (`<portal/rpc/typed.h>`, `typed_async.h`, `typed_import.h`, `typed_export.h`) |
+| Sideway | Runtime-tagged values, dynamic converter overload probing in declaration order, custom dynamic binders or legacy tagged peers | `<portal/backends/rpc.h>`; opt into storage reuse with `<portal/backends/rpc_reuse.h>` |
 
-Prefer typed RPC for new value-oriented protocols when both peers share the
-schema. Keep the dynamic backend for its conversion/overload model or existing
-peers. Each endpoint must choose the same wire protocol: `PTR1`/`PTS1` typed
-frames and existing `DRPC`/`DRPR` frames are distinct. There is no implicit
-protocol switch or negotiation. Existing generated APIs and protocol bytes keep
-their existing behavior.
+Use typed RPC by default for RPC protocols where peers share the schema. Use the
+dynamic tagged backend (`<portal/backends/rpc.h>`) and type-erased invocations
+(`bind_erased_async`, `invocation<R>`) as explicit sideway paths when runtime
+tag probing or heterogeneous erased queues are needed. Each endpoint must choose
+the same wire protocol: `PTR1`/`PTS1` typed frames and legacy `DRPC`/`DRPR`
+frames are distinct. There is no implicit protocol switch or negotiation.
 
 Transport implementations supply connection management, response correlation,
 I/O, timeouts and shutdown. FF integration uses the existing optional invocation
@@ -96,7 +99,7 @@ Map the generated symbol and its selected C++ signature to the deployed method
 descriptor. The following example uses the `Add` descriptor above.
 
 ```cpp
-#include <portal/rpc/typed_import.h>
+#include <portal/rpc.h>
 #define PORTAL_IMPORT_DEF "my_module/import.def"
 #include <portal/import.h>
 #undef PORTAL_IMPORT_DEF
@@ -111,7 +114,7 @@ auto make_calculator(std::shared_ptr<Transport> io) {
     using context = typename portal::typed_rpc::direct_import_backend<Transport, routes>::context;
     using service = portal::calculator<context>;
     auto owner = std::make_shared<context>(std::move(io));
-    return portal::bind_static_async<portal::calculator>(owner, typename service::object_t{});
+    return portal::bind_async<portal::calculator>(owner, typename service::object_t{});
 }
 
 // Use the connected transport at the call site.
@@ -119,11 +122,25 @@ auto client = make_calculator(io);
 auto call = client.add(std::int32_t{20}, std::int32_t{22});
 ```
 
-The concrete call supports `std::move(call).start(handler)` and FF's
-`await_static_invocation`. Use `bind_async` for an erased service view.
-Generated free functions use the same mapping through
-`portal::async_functions::name<false>(owner, args...)` (concrete) or
-`name(owner, args...)` (erased). Each mapped method has a compile-time
+`bind_async` returns a concrete typed view by default (`bind_static_async` is
+retained as an alias). Its calls support `std::move(call).start(handler)` and
+FF's `await_static_invocation`. Use the sideway `bind_erased_async` when an
+erased `invocation<R>` view is needed. Generated free functions use the same
+mapping and default to concrete calls through
+`portal::async_functions::name(owner, args...)`; opt into the erased sideway
+with `portal::async_functions::name<true>(owner, args...)`.
+
+### Generated typed exports and default codecs
+
+`<portal/rpc/typed_export.h>` mirrors the import side for `PORTAL_EXPORT_DEF`:
+`typed_rpc::define_export<ExportGroup, Signature, Routes>(router, fn)` registers
+declared free-function overloads and `typed_rpc::export_class<ClassProxy, Routes>(router, native)`
+registers all declared member functions (including flattened `IMPLEMENTS`
+interfaces) onto a `typed_rpc::router`, borrowing `native`. The class is installed as a batch. A conflicting method ID/revision leaves the existing routes intact. For standard C++
+types, `typed_rpc::signature_method<Id, Revision, R(Args...)>` maps directly
+through `wire::default_codec_t<T>` (fixed-width integers, `bool`, `double`,
+`void`, `std::string` up to `default_blob_limit`, `std::array`, `std::vector` up
+to `default_sequence_limit`, `wire::option` and `PORTAL_WIRE_RECORD` types). Each mapped method has a compile-time
 signature check. Overloads can map to separate deployed IDs. Use the declared
 signature, including argument reference qualifiers, as the route key. Captured
 values must match the wire codec types. User-defined values need an owning

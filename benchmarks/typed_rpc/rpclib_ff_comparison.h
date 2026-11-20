@@ -220,10 +220,10 @@ static int compare_pipeline(const std::string& impl, int round, int window, bool
                 using service = portal::bench_rpc_service<context>;
                 if (impl == "ff-named")
                     ff_named_suite(*io, impl.c_str(), round, window,
-                        portal::bind_static_async<portal::bench_rpc_service>(owner, service::object_t{}));
+                        portal::bind_async<portal::bench_rpc_service>(owner, service::object_t{}));
                 else
                     ff_named_suite(*io, impl.c_str(), round, window,
-                        portal::bind_async<portal::bench_rpc_service>(owner, service::object_t{}));
+                        portal::bind_erased_async<portal::bench_rpc_service>(owner, service::object_t{}));
             } else {
                 auto run = [&](auto wrap) {
                     ff_suite(*io, impl.c_str(), round, window,

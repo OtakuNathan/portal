@@ -85,36 +85,50 @@ static void check_generated_imports() {
     using context = tr::direct_import_backend<no_throw_transport, routes>::context;
     using service = portal::typed_service<context>;
     auto endpoint = std::make_shared<context>(std::make_shared<no_throw_transport>());
-    auto client = portal::bind_static_async<portal::typed_service>(endpoint, service::object_t{});
-    auto erased = portal::bind_async<portal::typed_service>(endpoint, service::object_t{});
+    auto client = portal::bind_async<portal::typed_service>(endpoint, service::object_t{});
+    auto erased = portal::bind_erased_async<portal::typed_service>(endpoint, service::object_t{});
+    auto compat = portal::bind_static_async<portal::typed_service>(endpoint, service::object_t{});
     int finished = 0;
     auto sum = client.echo(std::int32_t(19), std::int32_t(23));
+    static_assert(!std::is_same<decltype(sum), portal::invocation<std::int32_t>>::value,
+                  "bind_async defaults to concrete typed view");
     std::move(sum).start([&](portal::async_result<std::int32_t> r) noexcept {
+        CHECK(r.has_value() && *r.value == 42);
+        ++finished;
+    });
+    auto sum_compat = compat.echo(std::int32_t(10), std::int32_t(32));
+    static_assert(!std::is_same<decltype(sum_compat), portal::invocation<std::int32_t>>::value,
+                  "bind_static_async stays concrete");
+    std::move(sum_compat).start([&](portal::async_result<std::int32_t> r) noexcept {
         CHECK(r.has_value() && *r.value == 42);
         ++finished;
     });
     std::string text("owned");
     auto echo = erased.echo(std::move(text));
     static_assert(std::is_same<decltype(echo), portal::invocation<std::string>>::value,
-                  "erased view");
+                  "bind_erased_async produces erased view");
     text.assign("changed");
     std::move(echo).start([&](portal::async_result<std::string> r) noexcept {
         CHECK(r.has_value() && *r.value == "owned");
         ++finished;
     });
-    auto ping = portal::async_functions::typed_ping<false>(endpoint);
+    auto ping = portal::async_functions::typed_ping(endpoint);
+    static_assert(!std::is_same<decltype(ping), portal::invocation<void>>::value,
+                  "async_functions default to concrete typed call");
     std::move(ping).start([&](portal::async_result<void> r) noexcept {
         CHECK(r.has_value());
         ++finished;
     });
     endpoint->budget.max_frame_bytes = 1;
-    auto rejected = portal::async_functions::typed_ping(endpoint);
+    auto rejected = portal::async_functions::typed_ping<true>(endpoint);
+    static_assert(std::is_same<decltype(rejected), portal::invocation<void>>::value,
+                  "async_functions<true> opts into erased sideway");
     endpoint.reset();
     std::move(rejected).start([&](portal::async_result<void> r) noexcept {
         CHECK(!r.has_value() && r.error.code == tr::make_error_code(w::errc::limit_exceeded));
         ++finished;
     });
-    CHECK(finished == 4);
+    CHECK(finished == 5);
 }
 struct racing_transport {
     tr::router server;
